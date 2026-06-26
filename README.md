@@ -79,6 +79,9 @@ The snippet above writes `samples.png` — one image each for classes 0–4
   <img src="assets/cifar10_samples.png" width="320" alt="CIFAR-10 samples for classes 0-4 from cifar10/n4096">
 </p>
 
+When the CLI or helpers use the default `auto` device selection, they prefer
+CUDA, then Apple Silicon MPS, then CPU.
+
 Six checkpoints are available, named `{task}/n{oscillators}`:
 
 `cifar10/n1024`, `cifar10/n2048`, `cifar10/n4096`, `imagenet64/n6656`,
@@ -278,4 +281,3 @@ Third-party components:
 - The DINOv2 backbone is loaded at runtime from
   [facebookresearch/dinov2](https://github.com/facebookresearch/dinov2)
   (Apache-2.0); not vendored here.
-

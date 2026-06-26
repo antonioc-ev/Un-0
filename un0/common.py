@@ -29,9 +29,13 @@ def seed_everything(seed: int) -> None:
 
 
 def resolve_device(device: str) -> torch.device:
-    """Resolve `auto` to CUDA when available."""
+    """Resolve `auto` to CUDA, then MPS, then CPU."""
     if device == "auto":
-        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        if torch.cuda.is_available():
+            return torch.device("cuda")
+        if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            return torch.device("mps")
+        return torch.device("cpu")
     return torch.device(device)
 
 
