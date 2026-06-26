@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from argparse import Namespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import pytest
 import torch
@@ -12,47 +12,41 @@ from un0.common import resolve_device
 
 def test_resolve_device_auto_prefers_cuda_over_mps(monkeypatch) -> None:
     """`auto` keeps preferring CUDA when both GPU backends are reported ready."""
-    def fake_current_accelerator(*, check_available):
-        assert check_available is True
-        return torch.device("cuda")
-
+    current_accelerator = Mock(return_value=torch.device("cuda"))
     monkeypatch.setattr(
         torch.accelerator,
         "current_accelerator",
-        fake_current_accelerator,
+        current_accelerator,
     )
 
     assert resolve_device("auto").type == "cuda"
+    current_accelerator.assert_called_once_with(check_available=True)
 
 
 def test_resolve_device_auto_falls_back_to_mps(monkeypatch) -> None:
     """`auto` selects MPS when CUDA is unavailable on Apple Silicon."""
-    def fake_current_accelerator(*, check_available):
-        assert check_available is True
-        return torch.device("mps")
-
+    current_accelerator = Mock(return_value=torch.device("mps"))
     monkeypatch.setattr(
         torch.accelerator,
         "current_accelerator",
-        fake_current_accelerator,
+        current_accelerator,
     )
 
     assert resolve_device("auto").type == "mps"
+    current_accelerator.assert_called_once_with(check_available=True)
 
 
 def test_resolve_device_auto_falls_back_to_cpu(monkeypatch) -> None:
     """`auto` stays usable when neither CUDA nor MPS is available."""
-    def fake_current_accelerator(*, check_available):
-        assert check_available is True
-        return None
-
+    current_accelerator = Mock(return_value=None)
     monkeypatch.setattr(
         torch.accelerator,
         "current_accelerator",
-        fake_current_accelerator,
+        current_accelerator,
     )
 
     assert resolve_device("auto").type == "cpu"
+    current_accelerator.assert_called_once_with(check_available=True)
 
 
 def test_train_cifar10_distributed_path_keeps_cuda_ddp(monkeypatch) -> None:
