@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 from argparse import Namespace
-from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -13,11 +12,14 @@ from un0.common import resolve_device
 
 def test_resolve_device_auto_prefers_cuda_over_mps(monkeypatch) -> None:
     """`auto` keeps preferring CUDA when both GPU backends are reported ready."""
-    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    def fake_current_accelerator(*, check_available):
+        assert check_available is True
+        return torch.device("cuda")
+
     monkeypatch.setattr(
-        torch,
-        "backends",
-        SimpleNamespace(mps=SimpleNamespace(is_available=lambda: True)),
+        torch.accelerator,
+        "current_accelerator",
+        fake_current_accelerator,
     )
 
     assert resolve_device("auto").type == "cuda"
@@ -25,11 +27,14 @@ def test_resolve_device_auto_prefers_cuda_over_mps(monkeypatch) -> None:
 
 def test_resolve_device_auto_falls_back_to_mps(monkeypatch) -> None:
     """`auto` selects MPS when CUDA is unavailable on Apple Silicon."""
-    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    def fake_current_accelerator(*, check_available):
+        assert check_available is True
+        return torch.device("mps")
+
     monkeypatch.setattr(
-        torch,
-        "backends",
-        SimpleNamespace(mps=SimpleNamespace(is_available=lambda: True)),
+        torch.accelerator,
+        "current_accelerator",
+        fake_current_accelerator,
     )
 
     assert resolve_device("auto").type == "mps"
@@ -37,8 +42,15 @@ def test_resolve_device_auto_falls_back_to_mps(monkeypatch) -> None:
 
 def test_resolve_device_auto_falls_back_to_cpu(monkeypatch) -> None:
     """`auto` stays usable when neither CUDA nor MPS is available."""
-    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
-    monkeypatch.setattr(torch, "backends", SimpleNamespace())
+    def fake_current_accelerator(*, check_available):
+        assert check_available is True
+        return None
+
+    monkeypatch.setattr(
+        torch.accelerator,
+        "current_accelerator",
+        fake_current_accelerator,
+    )
 
     assert resolve_device("auto").type == "cpu"
 
