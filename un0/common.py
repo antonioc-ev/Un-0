@@ -29,7 +29,7 @@ def seed_everything(seed: int) -> None:
 
 
 def resolve_device(device: str) -> torch.device:
-    """Resolve `auto` to CUDA, then MPS, then CPU."""
+    """Resolve the requested device string to a torch.device, with "auto" detection."""
     if device == "auto":
         if accelerator := torch.accelerator.current_accelerator(check_available=True):
             return accelerator
