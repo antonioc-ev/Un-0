@@ -272,7 +272,9 @@ def train(args: argparse.Namespace) -> None:
         for param in raw_model.dynamics.parameters():
             param.requires_grad_(False)  # noqa: FBT003
     config = vars(args).copy()
-    dino = DINOFeatureExtractor().to(device)
+    # MPS (Apple Silicon) does not implement the antialiased bicubic kernel;
+    # disable it so training works on MPS without changing any other path.
+    dino = DINOFeatureExtractor(antialias=device.type != "mps").to(device)
     # Compile DINO's forward. Input shape is fixed by IMAGE_SIZE and
     # feature_batch_size, so Inductor compiles once and reuses. Backbone
     # params are frozen, so no recompilation on train/eval toggles.
