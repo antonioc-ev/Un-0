@@ -26,6 +26,12 @@ def main() -> None:
     parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--num-workers", type=int, default=4)
     parser.add_argument("--image-size", type=int, default=32)
+    parser.add_argument(
+        "--feature-batch-size",
+        type=int,
+        default=FEATURE_BATCH_SIZE,
+        help="Microbatch size for DINO feature extraction.",
+    )
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -61,7 +67,7 @@ def main() -> None:
             views = extract_feature_views(
                 dino,
                 x,
-                batch_size=FEATURE_BATCH_SIZE,
+                batch_size=int(args.feature_batch_size),
                 image_size=int(args.image_size),
             )
         block = torch.stack(views, dim=1).detach().to(dtype=torch.bfloat16).cpu()

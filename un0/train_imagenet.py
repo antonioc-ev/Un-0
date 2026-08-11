@@ -102,6 +102,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--precision", choices=("fp32", "tf32", "bf16", "fp16"), default="bf16")
     parser.add_argument("--dino-weight", type=float, default=1.0)
     parser.add_argument("--pixel-weight", type=float, default=0.1)
+    parser.add_argument(
+        "--feature-batch-size",
+        type=int,
+        default=FEATURE_BATCH_SIZE,
+        help="Microbatch size for DINO feature extraction.",
+    )
     parser.add_argument("--queue-size", type=int, default=128)
     parser.add_argument("--num-pos", type=int, default=64)
     parser.add_argument(
@@ -336,7 +342,7 @@ def train(args: argparse.Namespace) -> None:
                         dino_weight=float(args.dino_weight),
                         pixel_weight=float(args.pixel_weight),
                         gamma=GAMMA,
-                        feature_batch_size=FEATURE_BATCH_SIZE,
+                        feature_batch_size=int(args.feature_batch_size),
                         image_size=IMAGE_SIZE,
                         x_real_pos=x_real_pos,
                         class_id_pos=class_id_pos,
