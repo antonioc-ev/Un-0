@@ -64,7 +64,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dino-weight", type=float, default=1.0)
     parser.add_argument("--pixel-weight", type=float, default=0.004)
     parser.add_argument(
-        "--feature-batch-size",
+        "--dino-batch-size",
         type=int,
         default=FEATURE_BATCH_SIZE,
         help="Microbatch size for DINO feature extraction.",
@@ -494,7 +494,7 @@ def train(args: argparse.Namespace) -> None:
                         dino_weight=float(args.dino_weight),
                         pixel_weight=float(args.pixel_weight),
                         gamma=GAMMA,
-                        feature_batch_size=int(args.feature_batch_size),
+                        feature_batch_size=int(args.dino_batch_size),
                         image_size=IMAGE_SIZE,
                         x_real_pos=x_real_pos,
                         class_id_pos=class_id_pos,

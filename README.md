@@ -141,7 +141,7 @@ CLI flag — run `uv run python un0/train_cifar10.py --help` for the full list a
 its defaults. When `--wandb-project` is set, rank 0 logs per-step metrics and
 uploads a 10×10 class-conditional sample grid every 100 epochs.
 
-`--feature-batch-size` controls the microbatch used inside DINO feature
+`--dino-batch-size` controls the microbatch used inside DINO feature
 extraction without changing the optimizer batch or feature definition. Its
 default is 64 for CIFAR-10 and 256 for ImageNet-64; memory-rich GPUs can use a
 larger value such as 1024 to reduce feature-extraction overhead.

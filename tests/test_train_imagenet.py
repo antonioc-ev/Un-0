@@ -15,12 +15,12 @@ def test_parser_requires_data_root() -> None:
     args = parser.parse_args(["--data-root", "/tmp/x"])  # noqa: S108
     assert args.data_root == "/tmp/x"  # noqa: S108
     assert args.fid_every_epochs == 0
-    assert args.feature_batch_size == 256
+    assert args.dino_batch_size == 256
 
     overridden = parser.parse_args(
-        ["--data-root", "/tmp/x", "--feature-batch-size", "1024"],  # noqa: S108
+        ["--data-root", "/tmp/x", "--dino-batch-size", "1024"],  # noqa: S108
     )
-    assert overridden.feature_batch_size == 1024
+    assert overridden.dino_batch_size == 1024
 
 
 def test_fid_args_present_and_streaming_absent() -> None:
