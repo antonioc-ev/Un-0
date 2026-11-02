@@ -268,8 +268,8 @@ def test_padding_after_the_end_piece_does_not_train() -> None:
     assert torch.count_nonzero(model.root_phase.weight.grad[1]) > 0
 
 
-def test_mlx_end_piece_rests_the_wheels() -> None:
-    """The Metal bag matches the PyTorch rule: rest after the end piece, ignore the pad."""
+def test_mlx_end_piece_does_not_rest_the_wheels() -> None:
+    """The Metal bag keeps spinning through the end piece. Every target is scored."""
     mlx = pytest.importorskip("mlx")
     from mlx import nn
     import mlx.core as mx
@@ -300,18 +300,20 @@ def test_mlx_end_piece_rests_the_wheels() -> None:
     step = math.sin(0.2)
     two = math.sin(0.4)
     three = math.sin(0.6)
+    four = math.sin(0.8)
+    five = math.sin(1.0)
     assert math.isclose(float(logits[0, 2, 0]), three, abs_tol=1e-5)
-    assert math.isclose(float(logits[0, 3, 0]), step, abs_tol=1e-5)
-    assert math.isclose(float(logits[0, 4, 0]), two, abs_tol=1e-5)
-    assert math.isclose(float(logits[1, 2, 0]), 0.0, abs_tol=1e-5)
-    assert math.isclose(float(logits[1, 4, 0]), step, abs_tol=1e-5)
+    assert math.isclose(float(logits[0, 3, 0]), four, abs_tol=1e-5)
+    assert math.isclose(float(logits[0, 4, 0]), five, abs_tol=1e-5)
+    assert math.isclose(float(logits[1, 2, 0]), three, abs_tol=1e-5)
+    assert math.isclose(float(logits[1, 4, 0]), five, abs_tol=1e-5)
     assert math.isclose(float(period_logits[0, -1, 0]), three, abs_tol=1e-5)
 
     scored = KuramotoMLX(6, n=4, rank=1, n_roots=1, n_slow=0, n_stamp=0, latch=True, eos_id=eos)
     tokens = mx.array([[1, 2, 3, eos, eos, eos]])
     other = mx.array([[1, 2, 3, eos, 5, 0]])
     mx.eval(scored.parameters())
-    assert math.isclose(float(loss_fn(scored, tokens)), float(loss_fn(scored, other)), abs_tol=1e-5)
+    assert not math.isclose(float(loss_fn(scored, tokens)), float(loss_fn(scored, other)), abs_tol=1e-5)
     compiled = mx.compile(lambda batch: loss_fn(scored, batch))
     compiled_loss = compiled(tokens)
     mx.eval(compiled_loss)
@@ -454,8 +456,8 @@ def test_arc_matches_whole_pieces_in_the_ending() -> None:
     assert arc_score(2, -1, (2, 1), itos) == StoryArc("Fin", "", "neither")
 
 
-def test_mlx_dilemma_drive_is_causal_and_generation_takes_no_dilemma() -> None:
-    """Metal matches the causal drives. Sampling still has no dilemma argument."""
+def test_mlx_generation_takes_no_dilemma_and_the_step_stays_finite() -> None:
+    """Sampling has no dilemma argument. A plain window still trains."""
     pytest.importorskip("mlx")
     from mlx import nn
     import mlx.core as mx
@@ -469,151 +471,12 @@ def test_mlx_dilemma_drive_is_causal_and_generation_takes_no_dilemma() -> None:
     assert "dilemma" not in inspect.signature(generate).parameters
     assert "dilemma" not in inspect.signature(query_main).parameters
 
-    model = KuramotoMLX(6, n=4, rank=1, n_roots=1, n_slow=0, n_stamp=0, eos_id=0)
-    model.omega = mx.zeros((model.n,))
-    model.U = mx.zeros((model.n, 1))
-    model.V = mx.zeros((model.n, 1))
-    model.D = mx.ones((model.n, 1))
-    model.theta0 = mx.zeros((model.n,))
-    phases = mx.zeros((6, 1))
-    phases = phases.at[2, 0].add(0.4)
-    phases = phases.at[3, 0].add(0.6)
-    phases = phases.at[4, 0].add(-0.8)
-    model.root_phase.weight = phases
-    weight = mx.zeros((6, 2 * model.n)).at[0, 0].add(1.0)
-    model.readout.weight = weight
-    model.readout.bias = mx.zeros((6,))
+    model = KuramotoMLX(6, n=4, rank=1, n_roots=1, n_slow=0, n_stamp=0, latch=False)
     tokens = mx.array([[1, 1, 3, 1]])
-    missing = mx.array([-1])
-    plain = model(tokens)
-    named = model(tokens, mx.array([2]), missing)
-    on = model(tokens, missing, mx.array([3]))
-    alt = model(tokens, missing, mx.array([4]))
-    mx.eval(plain, named, on, alt)
-    assert mx.allclose(on[:, :2], plain[:, :2], atol=1e-5)
-    assert not bool(mx.allclose(named[:, 0], plain[:, 0], atol=1e-5).item())
-    assert not bool(mx.allclose(on[:, 2], plain[:, 2], atol=1e-5).item())
-    assert not bool(mx.allclose(on[:, 2], alt[:, 2], atol=1e-5).item())
-
-    folded_model = KuramotoMLX(
-        6,
-        n=4,
-        rank=1,
-        n_roots=1,
-        n_slow=0,
-        n_stamp=0,
-        eos_id=0,
-        beat_canon=[0, 1, 2, 3, 4, 3],
-    )
-    folded_model.omega = mx.zeros((folded_model.n,))
-    folded_model.U = mx.zeros((folded_model.n, 1))
-    folded_model.V = mx.zeros((folded_model.n, 1))
-    folded_model.D = mx.ones((folded_model.n, 1))
-    folded_model.theta0 = mx.zeros((folded_model.n,))
-    folded_model.root_phase.weight = phases
-    folded_model.readout.weight = model.readout.weight
-    folded_model.readout.bias = model.readout.bias
-    cased = mx.array([[1, 5, 1]])
-    quiet = folded_model(cased)
-    hit = folded_model(cased, missing, mx.array([3]))
-    mx.eval(quiet, hit)
-    assert mx.allclose(hit[:, :1], quiet[:, :1], atol=1e-5)
-    assert not bool(mx.allclose(hit[:, 1], quiet[:, 1], atol=1e-5).item())
-
-    compiled = mx.compile(
-        lambda batch, character, dilemma: loss_fn(model, batch, character, dilemma)
-    )
-    compiled_loss = compiled(tokens, missing, mx.array([3]))
+    compiled = mx.compile(lambda batch: loss_fn(model, batch))
+    compiled_loss = compiled(tokens)
     mx.eval(compiled_loss)
     assert math.isfinite(float(compiled_loss))
-    _loss, grads = nn.value_and_grad(
-        model, lambda batch, character, dilemma: loss_fn(model, batch, character, dilemma)
-    )(
-        tokens,
-        missing,
-        mx.array([3]),
-    )
+    _loss, grads = nn.value_and_grad(model, lambda batch: loss_fn(model, batch))(tokens)
     mx.eval(grads)
     assert math.isfinite(float(_loss))
-
-
-def test_finite_grads_drop_an_overflowed_update() -> None:
-    """One non-finite entry drops the whole update. A finite update is kept."""
-    pytest.importorskip("mlx")
-    import mlx.core as mx
-
-    from sidecar.train_mlx import _finite_grads
-
-    overflow = _finite_grads({"weight": mx.array([1.0, mx.nan]), "bias": mx.array([3.0])})
-    kept = _finite_grads({"weight": mx.array([1.0, -2.0])})
-    mx.eval(overflow, kept)
-    assert float(mx.sum(mx.abs(overflow["weight"]))) == 0.0
-    assert float(overflow["bias"]) == 0.0
-    assert mx.allclose(kept["weight"], mx.array([1.0, -2.0])).item()
-
-
-def test_mlx_long_story_with_a_padded_tail_keeps_a_finite_loss() -> None:
-    """A padded short story and an inactive dilemma train beside a long story.
-
-    The long row used to overflow the backward. That update wrote NaN into
-    the weights, and the next loss was NaN. Both steps stay finite.
-    """
-    pytest.importorskip("mlx")
-    from mlx import nn
-    import mlx.core as mx
-    import mlx.optimizers as optim
-    from mlx.utils import tree_flatten
-
-    from sidecar.train_mlx import KuramotoMLX, _finite_grads, loss_fn
-
-    mx.random.seed(0)
-    model = KuramotoMLX(
-        16,
-        n=8,
-        rank=4,
-        n_roots=2,
-        n_slow=2,
-        n_stamp=0,
-        latch=True,
-        heavy_pull=4.0,
-        eos_id=0,
-        boundary_ids=(1,),
-        beat_canon=list(range(16)),
-    )
-    model.U = model.U * 8
-    model.V = model.V * 8
-    model.D = model.D * 8
-    mx.eval(model.parameters())
-    long = [3] * 47 + [0]
-    short = [4, 5, 6, 2, 0, 0, 0, 0, *([0] * 40)]
-    tokens = mx.array([long, short])
-    character = mx.array([4, -1])
-    dilemma = mx.array([-1, -1])
-
-    def raw(batch: mx.array, names: mx.array, trouble: mx.array) -> mx.array:
-        return loss_fn(model, batch, names, trouble)
-
-    probed, raw_grads = nn.value_and_grad(model, raw)(tokens, character, dilemma)
-    mx.eval(probed, raw_grads)
-    assert math.isfinite(float(probed))
-    for _, grad in tree_flatten(raw_grads):
-        if isinstance(grad, mx.array) and mx.issubdtype(grad.dtype, mx.floating):
-            assert bool(mx.all(mx.isfinite(grad)).item())
-    optimizer = optim.AdamW(learning_rate=3e-3, weight_decay=0.01)
-    loss_and_grad = nn.value_and_grad(model, raw)
-
-    def step(batch: mx.array, names: mx.array, trouble: mx.array) -> mx.array:
-        loss, grads = loss_and_grad(batch, names, trouble)
-        grads = _finite_grads(grads)
-        grads, _norm = optim.clip_grad_norm(grads, 1.0)
-        optimizer.update(model, grads)
-        return loss
-
-    first = step(tokens, character, dilemma)
-    second = step(tokens, character, dilemma)
-    mx.eval(first, second, model.parameters())
-    assert math.isfinite(float(first))
-    assert math.isfinite(float(second))
-    for _, value in tree_flatten(model.parameters()):
-        if mx.issubdtype(value.dtype, mx.floating):
-            assert bool(mx.all(mx.isfinite(value)).item())

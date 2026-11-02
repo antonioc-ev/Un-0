@@ -139,9 +139,6 @@ def main() -> None:
         temperature=float(args.temperature),
         repetition_penalty=float(args.repetition_penalty),
         token_ids=token_ids,
-        character=character,
-        dilemma=dilemma,
-        canon=canon,
     )
     print(text, flush=True)
 
