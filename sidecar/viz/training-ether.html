@@ -1,0 +1,1965 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wheels and ether</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #12110e;
+    --rail: #181612;
+    --line: #2c2823;
+    --ink: #f3efe6;
+    --muted: #a39888;
+    --dim: #6f675c;
+    --copper: #c47a3e;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink); }
+  body {
+    font-family: "Iowan Old Style", Palatino, Georgia, serif;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 340px;
+    min-height: 100%;
+  }
+  #stage-wrap { position: relative; min-height: 420px; }
+  canvas { display: block; width: 100%; height: 100%; touch-action: none; cursor: grab; }
+  canvas.dragging { cursor: grabbing; }
+  #orbit-hint {
+    position: absolute;
+    left: 16px;
+    bottom: 14px;
+    margin: 0;
+    font-family: system-ui, sans-serif;
+    font-size: 12px;
+    letter-spacing: 0.02em;
+    color: var(--dim);
+    pointer-events: none;
+  }
+  #wheel { margin: 0; display: grid; gap: 4px; }
+  #wheel[hidden] { display: none; }
+  #wheel .sub {
+    font-family: system-ui, sans-serif;
+    font-size: 11px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--copper);
+  }
+  #wheel b { font-size: 17px; font-weight: 500; }
+  #wheel p { margin: 0; font-size: 15px; line-height: 1.4; color: #e4d9c8; }
+  #wheel #wheel-slot { font-size: 13px; line-height: 1.4; color: var(--muted); }
+  #wheel .words-label {
+    margin-top: 8px;
+    font-family: system-ui, sans-serif;
+    font-size: 11px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--dim);
+  }
+  #wheel-words {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    max-height: 24vh;
+    overflow: auto;
+  }
+  #wheel-words li {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    font-family: system-ui, sans-serif;
+    font-size: 13px;
+    line-height: 1.35;
+    color: var(--ink);
+  }
+  #wheel-words .from {
+    color: var(--dim);
+    font-size: 11px;
+    letter-spacing: 0.03em;
+    white-space: nowrap;
+  }
+  #rail {
+    background: var(--rail);
+    border-left: 1px solid var(--line);
+    padding: 28px 24px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    min-height: 100%;
+  }
+  .kicker {
+    margin: 0;
+    font-family: system-ui, sans-serif;
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+  h1 { margin: 0; font-size: 22px; font-weight: 500; line-height: 1.2; }
+  #piece { margin: 0; min-height: 34px; font-size: 28px; font-weight: 500; line-height: 1.15; }
+  #note { margin: 0; min-height: 72px; font-size: 16px; line-height: 1.45; color: #e4d9c8; }
+  #story {
+    margin: 0;
+    max-height: 28vh;
+    overflow: auto;
+    font-size: 15px;
+    line-height: 1.45;
+    color: var(--dim);
+  }
+  #story .now { color: var(--ink); }
+  .meters { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .meter span {
+    display: block;
+    font-family: system-ui, sans-serif;
+    font-size: 11px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+  .meter b {
+    display: block;
+    margin: 4px 0;
+    font-family: system-ui, sans-serif;
+    font-size: 22px;
+    font-weight: 500;
+  }
+  .bar { height: 3px; background: #2a2622; }
+  .bar i { display: block; height: 100%; background: var(--copper); width: 0; }
+  .meter.off .bar i { background: var(--ink); }
+  ul.legend { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 7px; }
+  ul.legend li {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-family: system-ui, sans-serif;
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .swatch { width: 14px; height: 14px; border: 1.5px solid var(--ink); border-radius: 50%; display: inline-block; }
+  .swatch.slow { border-width: 3px; }
+  .swatch.stamp { box-shadow: inset 0 0 0 2px var(--rail), inset 0 0 0 3.5px var(--ink); }
+  .swatch.arc { border-radius: 1px; transform: rotate(45deg); width: 11px; height: 11px; }
+  .swatch.ink { border: 0; border-radius: 50%; background: var(--copper); }
+  .swatch.tug { border: 0; border-radius: 0; height: 0; border-top: 1.5px solid #f3efe6; width: 14px; }
+  .swatch.field { border: 0; border-radius: 0; height: 0; border-top: 2px solid #c47870; width: 14px; }
+  .toggles { display: grid; gap: 6px; margin: 0; }
+  .toggles label {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    font-family: system-ui, sans-serif;
+    font-size: 12px;
+    line-height: 1.35;
+    color: var(--muted);
+    cursor: pointer;
+  }
+  .toggles input { margin-top: 2px; accent-color: var(--copper); }
+  .sizes { display: flex; gap: 8px; }
+  .sizes button[aria-pressed="true"] { border-color: var(--copper); color: var(--copper); }
+  .controls { margin-top: auto; display: flex; flex-wrap: wrap; gap: 8px; }
+  button {
+    appearance: none;
+    background: transparent;
+    color: var(--ink);
+    border: 1px solid #3d382f;
+    border-radius: 0;
+    padding: 8px 12px;
+    font-family: system-ui, sans-serif;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+  }
+  button:focus-visible { outline: 2px solid var(--copper); outline-offset: 2px; }
+  #fine {
+    margin: 0;
+    font-family: system-ui, sans-serif;
+    font-size: 11px;
+    line-height: 1.4;
+    color: var(--dim);
+  }
+  @media (max-width: 860px) {
+    body { grid-template-columns: 1fr; grid-template-rows: minmax(360px, 58vh) auto; }
+    #rail { border-left: 0; border-top: 1px solid var(--line); min-height: 0; }
+  }
+</style>
+</head>
+<body>
+  <div id="stage-wrap">
+    <canvas id="stage" aria-label="Wheels hanging in a volume, each with an arrow for its own spin. Drag to turn the volume."></canvas>
+    <p id="orbit-hint">Drag empty space to turn · drag a wheel to kick it · click a wheel for its words</p>
+  </div>
+  <aside id="rail">
+    <p class="kicker" id="mode">Training</p>
+    <h1>Wheels and ether</h1>
+    <p id="piece">Rest</p>
+    <p id="note">Each arrow is that wheel's own spin. The wheels hang in the ether, and the ether is the volume around them.</p>
+    <div id="wheel" hidden>
+      <p class="sub">Pinned to this moment</p>
+      <b id="wheel-title"></b>
+      <p id="wheel-body"></p>
+      <p class="words-label">Words this arrow scores</p>
+      <p id="wheel-slot"></p>
+      <ul id="wheel-words"></ul>
+    </div>
+    <p id="story" aria-live="polite"></p>
+    <div class="meters">
+      <div class="meter off">
+        <span>Wheels off rest</span>
+        <b id="spread">0°</b>
+        <div class="bar"><i id="spread-bar"></i></div>
+      </div>
+      <div class="meter">
+        <span>Ether ink</span>
+        <b id="ink">0</b>
+        <div class="bar"><i id="ink-bar"></i></div>
+      </div>
+    </div>
+    <ul class="legend">
+      <li><i class="swatch"></i> Arrow, that wheel's own spin</li>
+      <li><i class="swatch slow"></i> Slow clock, the arrow creeps</li>
+      <li><i class="swatch stamp"></i> Stamp clock, the arrow turns on a period</li>
+      <li><i class="swatch arc"></i> Arc wheel, the arrow turns on the last sentence</li>
+      <li><i class="swatch ink"></i> Ether, the volume that keeps each story</li>
+      <li><i class="swatch tug"></i> Acting pull, hotter and thicker when it is stronger</li>
+      <li><i class="swatch field"></i> Quieter pull, same scale: warm one way, cool the other</li>
+    </ul>
+    <div class="sizes" role="group" aria-label="How many wheels">
+      <button type="button" data-wheels="64">64</button>
+      <button type="button" data-wheels="256">256</button>
+      <button type="button" data-wheels="512" aria-pressed="true">512</button>
+    </div>
+    <div class="toggles">
+      <label><input type="checkbox" id="show-acting" checked> Show acting</label>
+      <label><input type="checkbox" id="show-field" checked> Show the pull on every other wheel</label>
+    </div>
+    <div class="controls">
+      <button type="button" id="pause">Pause</button>
+      <button type="button" id="restart">Play training</button>
+      <button type="button" id="recall">Play recall</button>
+      <button type="button" id="reset">Reset to start</button>
+    </div>
+    <p id="fine">The arrow is that wheel's live angle, and that angle scores the word. A slot stores a pose the whole cloud reached. The table says which pose followed which, and it does not name the word. Drag a wheel to turn its arrow. That pull moves the others, and the cloud answers with a word from a story on the shelf. Where the ball sits is only so you can see a pull carry it.</p>
+  </aside>
+<script>
+const RABBIT = ["Once"," upon"," a"," time",","," there"," was"," a"," rabbit","."," The"," rabbit"," was"," very"," hot","."," He"," wanted"," to"," find"," a"," cool"," place","."," So",","," he"," went"," to"," a"," river","."," He"," saw"," some"," birds"," singing","."," The"," rabbit"," sang"," with"," them","."," He"," felt"," happy"," and"," cool","."," The"," end",".","<|endoftext|>"];
+const TIMMY = ["Once"," upon"," a"," time",","," there"," was"," a"," boy"," named"," Timmy","."," Timmy"," wanted"," to"," grab"," an"," apple"," from"," a"," tree",","," but"," it"," was"," too"," high"," up","."," He"," tried"," to"," jump",","," but"," it"," was"," too"," difficult","."," Then",","," Timmy"," saw"," an"," iron"," ladder"," nearby","."," He"," climbed"," up"," the"," ladder"," and"," grabbed"," the"," apple","."," It"," was"," delicious","!","<|endoftext|>"];
+const BOW = ["Once"," upon"," a"," time",","," there"," was"," a"," little"," dog"," named"," Bow","."," Bow"," loved"," to"," sing","."," One"," day",","," Bow"," found"," a"," microphone","."," Bow"," was"," very"," happy","."," Bow"," wanted"," to"," sing"," for"," everyone","."," Bow"," went"," to"," the"," park","."," He"," was"," very"," patient","."," He"," waited"," for"," his"," friends"," to"," come",".","<|endoftext|>"];
+
+const N_SLOW = 8;
+const N_STAMP = 8;
+const N_ARC = 1;
+const RANK = 4;
+const ROOTS = 4;
+const PEER_GAIN = 16;
+const SAMPLE = 36;
+const N_MEMORIES = 32;
+const WRITE_ALIGN = 0.5;
+const ROUTE_COUNT_KEEP = 0.5;
+const CHARACTER_WEIGHT = 1;
+const STICKY_WEIGHT = 0.25;
+const RESOLUTION_WEIGHT = 0.25;
+const GLUE = new Set("a an the and but or because to of in on at for with from".split(" "));
+const EOS = "<|endoftext|>";
+let N_WHEELS = 512;
+let GROUPS = [];
+let TOTALS = { word: 0, slow: N_SLOW, stamp: N_STAMP, arc: N_ARC };
+let SEATS = [];
+let N = 0;
+let U = [];
+let V = [];
+let D = [];
+let omega = [];
+const DUST = Array.from({ length: 80 }, (_, index) => {
+  const roll = mulberry32(1000 + index);
+  return {
+    x: (roll() - 0.5) * 2.3,
+    y: (roll() - 0.5) * 2,
+    z: (roll() - 0.5) * 2.3,
+    amount: 0.035,
+  };
+});
+
+function mulberry32(seed) {
+  let a = seed >>> 0;
+  return function rng() {
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+function randn(rng) {
+  const u = Math.max(rng(), 1e-9);
+  const v = rng();
+  return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+}
+function hashWord(word) {
+  let h = 2166136261;
+  for (const ch of word) {
+    h ^= ch.codePointAt(0);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0;
+}
+function rootPhi(word) {
+  let h = hashWord(word.trim().toLowerCase());
+  const phi = [];
+  for (let r = 0; r < ROOTS; r += 1) {
+    h = Math.imul(h ^ (h >>> 16), 0x7feb352d);
+    phi.push((((h >>> 0) % 1000) / 1000) * Math.PI);
+  }
+  return phi;
+}
+
+function sourceGain(index) {
+  return GROUPS[index] === "word" ? 1 : 4;
+}
+
+function couple(target, source) {
+  let weight = 0;
+  for (let k = 0; k < RANK; k += 1) {
+    weight += U[target * RANK + k] * V[source * RANK + k];
+  }
+  return weight * sourceGain(source);
+}
+function wordDriveAt(theta, word, index) {
+  const phi = rootPhi(word);
+  let ds = 0;
+  let dc = 0;
+  for (let k = 0; k < ROOTS; k += 1) {
+    ds += Math.sin(phi[k]) * D[index * ROOTS + k];
+    dc += Math.cos(phi[k]) * D[index * ROOTS + k];
+  }
+  const th = theta[index];
+  return omega[index] + Math.cos(th) * ds - Math.sin(th) * dc;
+}
+function dtFor(index, kind) {
+  const group = GROUPS[index];
+  const ends = typeof kind === "string" ? kind === "period" || kind === "resolution" : Boolean(kind && kind.ends);
+  const resolution = typeof kind === "string" ? kind === "resolution" : Boolean(kind && kind.resolution);
+  if (group === "slow") return 0.1;
+  if (group === "stamp") return ends ? 0.7 : 0;
+  if (group === "arc") return resolution ? 0.75 : 0;
+  return 0.7;
+}
+function phaseDriveAt(theta, index, parts) {
+  let ds = 0;
+  let dc = 0;
+  for (const part of parts) {
+    const phi = rootPhi(part.word);
+    for (let k = 0; k < ROOTS; k += 1) {
+      ds += part.weight * Math.sin(phi[k]) * D[index * ROOTS + k];
+      dc += part.weight * Math.cos(phi[k]) * D[index * ROOTS + k];
+    }
+  }
+  const th = theta[index];
+  return omega[index] + Math.cos(th) * ds - Math.sin(th) * dc;
+}
+function stepTheta(theta, piece) {
+  const field = [];
+  const lasers = [];
+  const hits = Array.from({ length: N }, () => []);
+  const next = theta.slice();
+  const slowParts = piece.slowParts || [];
+  const wordParts = [{ word: piece.text, weight: 1 }];
+  for (let target = 0; target < N; target += 1) {
+    const dt = dtFor(target, piece);
+    if (!dt) continue;
+    const stride = 1 + 2 * ((target * 5) % 127);
+    let source = target;
+    let best = null;
+    for (let sample = 0; sample < SAMPLE; sample += 1) {
+      source = (source + stride) % N;
+      if (source === target) continue;
+      let weight = 0;
+      const ut = target * RANK;
+      const vs = source * RANK;
+      for (let k = 0; k < RANK; k += 1) weight += U[ut + k] * V[vs + k];
+      const pull = weight * sourceGain(source) * Math.sin(theta[source] - theta[target]);
+      const delta = Math.max(-0.45, Math.min(0.45, dt * PEER_GAIN * pull));
+      const mag = Math.abs(delta);
+      if (!best || mag > Math.abs(best.delta)) best = { source, target, delta };
+      if (mag < 0.02) continue;
+      if (lasers.length < 32 || mag > Math.abs(lasers[lasers.length - 1].delta)) {
+        lasers.push({ source, target, delta });
+        if (lasers.length > 48) {
+          lasers.sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta));
+          lasers.length = 32;
+        }
+      }
+    }
+    if (!best || Math.abs(best.delta) < 0.008) continue;
+    field.push(best);
+    hits[target].push(best);
+    next[target] += best.delta;
+  }
+  lasers.sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta));
+  if (lasers.length > 32) lasers.length = 32;
+  const drive = theta.map((th, index) => {
+    const parts = GROUPS[index] === "slow" ? slowParts : wordParts;
+    return dtFor(index, piece) * phaseDriveAt(theta, index, parts) * 0.65;
+  });
+  for (let i = 0; i < N; i += 1) {
+    next[i] = Math.atan2(Math.sin(next[i] + drive[i]), Math.cos(next[i] + drive[i]));
+  }
+  return { theta: next, hits, drive, lasers, field };
+}
+function clonePos(list) {
+  return list.map((point) => ({ x: point.x, y: point.y, z: point.z }));
+}
+function seatsPos() {
+  return SEATS.map((point) => ({ x: point.x, y: point.y, z: point.z }));
+}
+function zeros() {
+  return Array(N).fill(0);
+}
+function carry(pos, field, kind) {
+  if (!field.length) {
+    return pos.map((point, index) => {
+      const dt = dtFor(index, kind);
+      if (!dt) return { x: point.x, y: point.y, z: point.z };
+      const heading = index * 2.399;
+      const travel = 0.16 * Math.min(1, dt);
+      return {
+        x: point.x + Math.cos(heading) * travel,
+        y: point.y + Math.sin(heading * 0.7) * travel * 0.55,
+        z: point.z + Math.sin(heading) * travel,
+      };
+    });
+  }
+  const delta = Array.from({ length: N }, () => ({ x: 0, y: 0, z: 0 }));
+  const pulls = field;
+  let peak = 0.02;
+  for (const pull of pulls) peak = Math.max(peak, Math.abs(pull.delta));
+  for (const pull of pulls) {
+    const weight = Math.abs(pull.delta) / peak;
+    const src = pos[pull.source];
+    const dst = pos[pull.target];
+    const dx = src.x - dst.x;
+    const dy = src.y - dst.y;
+    const dz = src.z - dst.z;
+    const span = Math.hypot(dx, dy, dz) || 1;
+    const ux = dx / span;
+    const uy = dy / span;
+    const uz = dz / span;
+    let px = -uz;
+    let py = 0.45;
+    let pz = ux;
+    const side = Math.hypot(px, py, pz) || 1;
+    px /= side;
+    py /= side;
+    pz /= side;
+    const travel = Math.min(0.16, span * 0.12) * (0.45 + 0.55 * weight);
+    const outward = 0.35 * travel * (1.1 / (Math.hypot(dst.x, dst.y, dst.z) || 1));
+    const ox = dst.x || 0.01;
+    const oy = dst.y || 0.01;
+    const oz = dst.z || 0.01;
+    const orad = Math.hypot(ox, oy, oz) || 1;
+    delta[pull.target].x += ux * travel * 0.45 + px * travel * 0.7 + (ox / orad) * outward;
+    delta[pull.target].y += uy * travel * 0.45 + py * travel * 0.7 + (oy / orad) * outward;
+    delta[pull.target].z += uz * travel * 0.45 + pz * travel * 0.7 + (oz / orad) * outward;
+  }
+  const cap = 0.22;
+  const limit = 2.05;
+  return pos.map((point, index) => {
+    let x = delta[index].x;
+    let y = delta[index].y;
+    let z = delta[index].z;
+    const mag = Math.hypot(x, y, z);
+    if (mag > cap) {
+      const scale = cap / mag;
+      x *= scale;
+      y *= scale;
+      z *= scale;
+    }
+    let nx = point.x + x;
+    let ny = point.y + y;
+    let nz = point.z + z;
+    const radius = Math.hypot(nx, ny, nz);
+    if (radius > limit) {
+      const scale = limit / radius;
+      nx *= scale;
+      ny *= scale;
+      nz *= scale;
+    }
+    return { x: nx, y: ny, z: nz };
+  });
+}
+
+function hasLetter(piece) {
+  return /[A-Za-z]/.test(piece);
+}
+function contentWord(piece) {
+  const word = piece.trim().toLowerCase();
+  if (GLUE.has(word) || !hasLetter(word)) return "";
+  return word;
+}
+function isBoundaryPiece(piece) {
+  return !hasLetter(piece) && /[.!?]/.test(piece);
+}
+function labelShelf(stories) {
+  const itos = [];
+  const lookup = new Map();
+  for (const story of stories) {
+    for (const piece of story) {
+      if (!lookup.has(piece)) {
+        lookup.set(piece, itos.length);
+        itos.push(piece);
+      }
+    }
+  }
+  const canon = itos.map((piece, index) => {
+    const folded = piece.toLowerCase();
+    return lookup.has(folded) ? lookup.get(folded) : index;
+  });
+  const skip = new Set();
+  const boundary = new Set();
+  itos.forEach((piece, index) => {
+    if (piece === EOS || !hasLetter(piece) || GLUE.has(piece.trim().toLowerCase())) skip.add(index);
+    if (isBoundaryPiece(piece)) boundary.add(index);
+  });
+  const freq = Array(itos.length).fill(0);
+  for (const story of stories) {
+    const seen = new Set();
+    for (const piece of story) {
+      const token = lookup.get(piece);
+      if (skip.has(token)) continue;
+      seen.add(canon[token]);
+    }
+    for (const key of seen) freq[key] += 1;
+  }
+  return stories.map((story) => readStory(story, itos, lookup, skip, canon, boundary, freq, stories.length));
+}
+function rarity(key, counts, freq, nDocs) {
+  const seen = key < freq.length ? freq[key] : 0;
+  return counts.get(key) * Math.log((nDocs + 1) / (seen + 1));
+}
+function readStory(story, itos, lookup, skip, canon, boundary, freq, nDocs) {
+  const ids = story.map((piece) => lookup.get(piece));
+  const marks = [];
+  ids.forEach((token, index) => {
+    if (boundary.has(token)) marks.push(index);
+  });
+  let ending = marks.length >= 2 ? marks[marks.length - 2] + 1 : -1;
+  if (ending >= ids.length) ending = -1;
+  const counts = new Map();
+  const named = new Map();
+  const before = new Set();
+  const order = [];
+  let atBoundary = true;
+  ids.forEach((token, index) => {
+    const boundaryHere = boundary.has(token);
+    if (!skip.has(token)) {
+      const key = canon[token];
+      if (!counts.has(key)) {
+        named.set(key, /[A-Z]/.test(itos[token]) && !atBoundary);
+        order.push(key);
+        counts.set(key, 0);
+      }
+      counts.set(key, counts.get(key) + 1);
+      if (!(ending >= 0 && index >= ending)) before.add(key);
+    }
+    if (boundaryHere) atBoundary = true;
+    else if (!skip.has(token)) atBoundary = false;
+  });
+  const character = order.reduce((best, key) => {
+    const namedBest = named.get(best) ? 1 : 0;
+    const namedKey = named.get(key) ? 1 : 0;
+    if (namedKey > namedBest || (namedKey === namedBest && counts.get(key) > counts.get(best))) return key;
+    return best;
+  }, order[0]);
+  let pool = order.filter((key) => key !== character && counts.get(key) >= 2 && before.has(key));
+  if (!pool.length) pool = order.filter((key) => key !== character && before.has(key));
+  const dilemma = pool.reduce((best, key) => (
+    rarity(key, counts, freq, nDocs) > rarity(best, counts, freq, nDocs) ? key : best
+  ), pool[0]);
+  const resolutionPieces = ending >= 0 ? ids.slice(ending, -1).map((id) => itos[id]) : [];
+  let resolutionWord = "";
+  for (const piece of resolutionPieces) {
+    if (contentWord(piece)) {
+      resolutionWord = piece.trim();
+      break;
+    }
+  }
+  return {
+    character: itos[character].trim(),
+    dilemma: pool.length ? itos[dilemma].trim() : "",
+    dilemmaPiece: pool.length ? itos[dilemma] : "",
+    resolutionStart: ending < 0 ? story.length : ending,
+    resolutionWord,
+  };
+}
+function tagStory(pieces, label) {
+  let dilemmaOn = false;
+  return pieces.map((text, index) => {
+    if (text === EOS) return { text, kind: "end", ends: false, resolution: false, slowParts: [] };
+    if (label.dilemmaPiece && text.toLowerCase() === label.dilemmaPiece.toLowerCase()) dilemmaOn = true;
+    const resolution = index >= label.resolutionStart;
+    const ends = isBoundaryPiece(text);
+    let kind = "word";
+    if (resolution) kind = "resolution";
+    else if (ends) kind = "period";
+    const slowParts = [{ word: label.character, weight: CHARACTER_WEIGHT }];
+    if (dilemmaOn) slowParts.push({ word: label.dilemma, weight: STICKY_WEIGHT });
+    if (resolution && label.resolutionWord) {
+      slowParts.push({ word: label.resolutionWord, weight: RESOLUTION_WEIGHT });
+    }
+    return { text, kind, ends, resolution, slowParts };
+  });
+}
+let prepared = null;
+function preparedStories() {
+  if (!prepared) {
+    const labels = labelShelf([RABBIT, TIMMY, BOW]);
+    prepared = [
+      { name: "rabbit", title: "Training · rabbit", pieces: tagStory(RABBIT, labels[0]), amount: 0.055, train: true },
+      { name: "Timmy", title: "Training · Timmy", pieces: tagStory(TIMMY, labels[1]), amount: 0.12, train: true },
+      { name: "Bow", title: "Recall · Bow", pieces: tagStory(BOW, labels[2]), amount: 0, train: false },
+    ];
+  }
+  return prepared;
+}
+
+let slotPoses = [];
+let routeK = [];
+let catalogFilled = 1;
+function resetCatalog() {
+  slotPoses = [zeros()];
+  routeK = Array.from({ length: N_MEMORIES }, () => Array(N_MEMORIES).fill(0));
+  catalogFilled = 1;
+}
+function decayCatalog() {
+  for (let row = 0; row < N_MEMORIES; row += 1) {
+    for (let col = 0; col < N_MEMORIES; col += 1) routeK[row][col] *= ROUTE_COUNT_KEEP;
+  }
+}
+function meanAlign(pose, pattern) {
+  let sum = 0;
+  for (let index = 0; index < pose.length; index += 1) sum += Math.cos(pose[index] - pattern[index]);
+  return sum / pose.length;
+}
+function storePose(pose, prev) {
+  let best = 0;
+  let bestVal = -2;
+  for (let slot = 0; slot < catalogFilled; slot += 1) {
+    const val = meanAlign(pose, slotPoses[slot]);
+    if (val > bestVal) {
+      bestVal = val;
+      best = slot;
+    }
+  }
+  if (bestVal >= WRITE_ALIGN) {
+    if (best !== prev) {
+      routeK[prev][best] += 1;
+      return { prev: best, slot: best, opened: false };
+    }
+    return { prev, slot: best, opened: false };
+  }
+  if (catalogFilled < N_MEMORIES) {
+    const slot = catalogFilled;
+    slotPoses.push(pose.slice());
+    catalogFilled += 1;
+    routeK[prev][slot] += 1;
+    return { prev: slot, slot, opened: true };
+  }
+  return { prev, slot: -1, opened: false };
+}
+function snapshotCatalog(prev) {
+  return {
+    filled: catalogFilled,
+    prev,
+    counts: routeK.map((row) => row.slice()),
+  };
+}
+function clickSlot(theta, catalog) {
+  if (!catalog || !slotPoses.length) return { slot: -1, align: -2 };
+  let best = 0;
+  let bestVal = -2;
+  const open = Math.min(catalog.filled, slotPoses.length);
+  for (let slot = 0; slot < open; slot += 1) {
+    const val = meanAlign(theta, slotPoses[slot]);
+    if (val > bestVal) {
+      bestVal = val;
+      best = slot;
+    }
+  }
+  if (bestVal < WRITE_ALIGN) return { slot: -1, align: bestVal };
+  return { slot: best, align: bestVal };
+}
+function nextSlot(catalog, slot) {
+  if (!catalog || slot < 0) return null;
+  const row = catalog.counts[slot];
+  if (!row) return null;
+  let best = -1;
+  let bestCount = 0;
+  for (let col = 0; col < catalog.filled; col += 1) {
+    if (row[col] > bestCount) {
+      bestCount = row[col];
+      best = col;
+    }
+  }
+  if (best < 0 || bestCount <= 0) return null;
+  return { slot: best, count: bestCount };
+}
+function slotName(slot) {
+  return slot === 0 ? "the rest slot" : `slot ${slot}`;
+}
+function slotLine(theta, catalog) {
+  const hit = clickSlot(theta, catalog);
+  if (hit.slot < 0) return "This pose has not landed in a slot. The arrow still scores the word.";
+  const next = nextSlot(catalog, hit.slot);
+  if (!next) return `This pose is ${slotName(hit.slot)}. The table has no step after it. The arrow scores the word.`;
+  const followed = next.slot === 0 ? "rest" : `slot ${next.slot}`;
+  return `This pose is ${slotName(hit.slot)}. The table's next pose is ${followed}.`;
+}
+
+function noteFor(piece, index, storyIndex) {
+  if (index === 0 && storyIndex === 0) {
+    return "The first word kicks the whole bag. Every wheel tugs every other wheel in this same step.";
+  }
+  if (index === 0) return "A new story starts from rest. The old ink is still there, and this pass writes darker.";
+  if (piece.kind === "resolution" && /[.!]/.test(piece.text)) {
+    return "The last sentence ends. The arc wheel and the stamp wheels join the same tug, and the whole bag steps together.";
+  }
+  if (piece.kind === "resolution") {
+    return "The last sentence turns the arc wheel on. It tugs the others in this same step.";
+  }
+  if (piece.kind === "period") {
+    return "A period. The stamp wheels join the tug. Every wheel still pulls on every other wheel at once.";
+  }
+  return "Each wheel drags the others, and is dragged back, in this same step. The arrows turn from that pull.";
+}
+
+function buildTimeline() {
+  resetCatalog();
+  const events = [];
+  const stories = preparedStories().filter((story) => story.train);
+  let prev = 0;
+  events.push({
+    type: "hold",
+    ms: 1600,
+    mode: "Training",
+    title: "Training",
+    piece: "Rest",
+    note: "Each arrow is that wheel's own spin. A kick drags both ways through the volume, and the arrows turn.",
+    story: [],
+    spoken: -1,
+    theta: zeros(),
+    pos: seatsPos(),
+    deposit: false,
+    catalog: snapshotCatalog(prev),
+  });
+  stories.forEach((story, storyIndex) => {
+    decayCatalog();
+    prev = 0;
+    let theta = zeros();
+    let pos = seatsPos();
+    story.pieces.forEach((piece, index) => {
+      if (piece.kind === "end") {
+        const fromPos = clonePos(pos);
+        const landed = storePose(zeros(), prev);
+        prev = landed.prev;
+        pos = seatsPos();
+        events.push({
+          type: "reset",
+          ms: 2600,
+          mode: "Training",
+          title: story.title,
+          piece: "Rest",
+          note: "The end piece returns every wheel to rest. They travel back across the volume. The ether keeps the ink on the path.",
+          story: story.pieces,
+          spoken: index,
+          from: theta.slice(),
+          to: zeros(),
+          fromPos,
+          toPos: clonePos(pos),
+          deposit: false,
+          mark: storyIndex === 0 ? "after-rabbit" : "after-timmy",
+          catalog: snapshotCatalog(prev),
+        });
+        theta = zeros();
+        return;
+      }
+      const from = theta.slice();
+      const fromPos = clonePos(pos);
+      const stepped = stepTheta(theta, piece);
+      theta = stepped.theta;
+      pos = carry(pos, stepped.field, piece);
+      const landed = storePose(theta, prev);
+      prev = landed.prev;
+      events.push({
+        type: "kick",
+        ms: index < 8 && storyIndex === 0 ? 860 : 620,
+        mode: "Training",
+        title: story.title,
+        piece: piece.text.trim(),
+        note: noteFor(piece, index, storyIndex),
+        story: story.pieces,
+        spoken: index,
+        from,
+        to: theta.slice(),
+        fromPos,
+        toPos: clonePos(pos),
+        hits: stepped.hits,
+        drive: stepped.drive,
+        lasers: stepped.lasers,
+        field: stepped.field,
+        kind: piece.kind,
+        ends: piece.ends,
+        resolution: piece.resolution,
+        deposit: true,
+        amount: story.amount,
+        catalog: snapshotCatalog(prev),
+      });
+    });
+    if (storyIndex === 0) {
+      events.push({
+        type: "hold",
+        ms: 2200,
+        mode: "Training",
+        title: "Training · rabbit",
+        piece: "Rest",
+        note: "The wheels are clear. The rabbit story is still in the ether. Timmy writes the next pass darker.",
+        story: story.pieces,
+        spoken: story.pieces.length - 1,
+        theta: zeros(),
+        pos: seatsPos(),
+        deposit: false,
+        catalog: snapshotCatalog(prev),
+      });
+    }
+  });
+
+  const recallPieces = preparedStories().find((story) => story.name === "Bow").pieces;
+  const trained = snapshotCatalog(prev);
+  let theta = zeros();
+  let pos = seatsPos();
+  events.push({
+    type: "hold",
+    ms: 1600,
+    mode: "Recall",
+    title: "Recall · Bow",
+    piece: "Rest",
+    note: "Recall starts from rest, on the ink from training. Bow was not in that pass. This pass does not write.",
+    story: recallPieces,
+    spoken: -1,
+    theta: zeros(),
+    pos: seatsPos(),
+    deposit: false,
+    mark: "recall",
+    catalog: trained,
+  });
+  recallPieces.forEach((piece, index) => {
+    if (piece.kind === "end") {
+      const fromPos = clonePos(pos);
+      events.push({
+        type: "reset",
+        ms: 2600,
+        mode: "Recall",
+        title: "Recall · Bow",
+        piece: "Rest",
+        note: "The end piece returns the wheels to rest. The ether is still the training ink.",
+        story: recallPieces,
+        spoken: index,
+        from: theta.slice(),
+        to: zeros(),
+        fromPos,
+        toPos: seatsPos(),
+        deposit: false,
+        mark: "recall-done",
+        catalog: trained,
+      });
+      return;
+    }
+    const from = theta.slice();
+    const fromPos = clonePos(pos);
+    const stepped = stepTheta(theta, piece);
+    theta = stepped.theta;
+    pos = carry(pos, stepped.field, piece);
+    events.push({
+      type: "kick",
+      ms: 620,
+      mode: "Recall",
+      title: "Recall · Bow",
+      piece: piece.text.trim(),
+      note: "This story was not in the training pass. The wheels still drag. The ether keeps the training ink.",
+      story: recallPieces,
+      spoken: index,
+      from,
+      to: theta.slice(),
+      fromPos,
+      toPos: clonePos(pos),
+      hits: stepped.hits,
+      drive: stepped.drive,
+      lasers: stepped.lasers,
+      field: stepped.field,
+      kind: piece.kind,
+      ends: piece.ends,
+      resolution: piece.resolution,
+      deposit: false,
+      recall: true,
+      catalog: trained,
+    });
+  });
+  return events;
+}
+
+const canvas = document.getElementById("stage");
+const ctx = canvas.getContext("2d");
+const modeEl = document.getElementById("mode");
+const pieceEl = document.getElementById("piece");
+const noteEl = document.getElementById("note");
+const storyEl = document.getElementById("story");
+const spreadEl = document.getElementById("spread");
+const spreadBar = document.getElementById("spread-bar");
+const inkEl = document.getElementById("ink");
+const inkBar = document.getElementById("ink-bar");
+const wheelEl = document.getElementById("wheel");
+const wheelTitle = document.getElementById("wheel-title");
+const wheelBody = document.getElementById("wheel-body");
+const wheelWords = document.getElementById("wheel-words");
+const wheelSlot = document.getElementById("wheel-slot");
+const pauseBtn = document.getElementById("pause");
+const showActing = document.getElementById("show-acting");
+const showField = document.getElementById("show-field");
+
+function buildBag(count) {
+  N_WHEELS = count;
+  const wordCount = count - N_SLOW - N_STAMP - N_ARC;
+  GROUPS = [
+    ...Array(wordCount).fill("word"),
+    ...Array(N_SLOW).fill("slow"),
+    ...Array(N_STAMP).fill("stamp"),
+    ...Array(N_ARC).fill("arc"),
+  ];
+  TOTALS.word = wordCount;
+  SEATS = GROUPS.map((_, index) => {
+    const y = 1 - (2 * (index + 0.5)) / GROUPS.length;
+    const ring = Math.sqrt(1 - y * y);
+    const golden = Math.PI * (3 - Math.sqrt(5));
+    const spread = 1.15;
+    return {
+      x: Math.cos(golden * index) * ring * spread,
+      y: y * spread * 0.9,
+      z: Math.sin(golden * index) * ring * spread,
+    };
+  });
+  N = GROUPS.length;
+  const bag = mulberry32(7 + count);
+  U = Array.from({ length: N * RANK }, () => randn(bag) * 0.08);
+  V = Array.from({ length: N * RANK }, () => randn(bag) * 0.08);
+  D = Array.from({ length: N * ROOTS }, () => randn(bag) * 0.45);
+  omega = Array.from({ length: N }, () => randn(bag) * 0.04);
+  events = buildTimeline();
+}
+
+let events = [];
+buildBag(512);
+const splats = [];
+const trails = [];
+let eventIndex = 0;
+let eventTime = 0;
+let playing = true;
+let inkTotal = 0;
+let lastStamp = performance.now();
+let layoutCache = null;
+let frame = 0;
+let yaw = 0.5;
+let pitch = 0.34;
+let dist = 4.05;
+let dragging = false;
+let dragX = 0;
+let dragY = 0;
+let pointerTravel = 0;
+let selected = null;
+let hands = null;
+let grab = null;
+const hitTargets = [];
+
+function queue() {
+  if (frame) return;
+  frame = requestAnimationFrame((now) => {
+    frame = 0;
+    render(now);
+  });
+}
+
+function resize() {
+  const rect = canvas.getBoundingClientRect();
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const width = Math.max(1, Math.round(rect.width * dpr));
+  const height = Math.max(1, Math.round(rect.height * dpr));
+  layoutCache = {
+    cx: width / 2,
+    cy: height / 2,
+    focal: Math.min(width, height) * 0.92,
+  };
+  if (canvas.width !== width || canvas.height !== height) {
+    canvas.width = width;
+    canvas.height = height;
+  }
+}
+function cross(a, b) {
+  return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+}
+function unit(v) {
+  const length = Math.hypot(v[0], v[1], v[2]) || 1;
+  return [v[0] / length, v[1] / length, v[2] / length];
+}
+function dot(a, b) {
+  return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+}
+function view() {
+  const eye = [
+    Math.sin(yaw) * Math.cos(pitch) * dist,
+    Math.sin(pitch) * dist,
+    Math.cos(yaw) * Math.cos(pitch) * dist,
+  ];
+  const forward = unit([-eye[0], -eye[1], -eye[2]]);
+  const right = unit(cross(forward, [0, 1, 0]));
+  const up = cross(right, forward);
+  return { eye, forward, right, up };
+}
+function place(point, index, now) {
+  const drift = 0.018;
+  return {
+    x: point.x + drift * Math.sin(now * 0.0003 + index),
+    y: point.y + drift * Math.cos(now * 0.00024 + index * 1.3),
+    z: point.z + drift * Math.sin(now * 0.00022 + index * 0.7),
+  };
+}
+function placesOf(event, t) {
+  if (event.type === "hold") return event.pos;
+  const clamped = Math.min(1, t);
+  const glide = event.type === "kick"
+    ? ease(Math.max(0, (clamped - 0.2) / 0.8))
+    : ease(clamped);
+  return event.fromPos.map((point, index) => ({
+    x: point.x + (event.toPos[index].x - point.x) * glide,
+    y: point.y + (event.toPos[index].y - point.y) * glide,
+    z: point.z + (event.toPos[index].z - point.z) * glide,
+  }));
+}
+function project(point, cam) {
+  const rel = [point.x - cam.eye[0], point.y - cam.eye[1], point.z - cam.eye[2]];
+  const depth = dot(rel, cam.forward);
+  if (depth < 0.35) return null;
+  const scale = layoutCache.focal / depth;
+  return {
+    x: layoutCache.cx + dot(rel, cam.right) * scale,
+    y: layoutCache.cy - dot(rel, cam.up) * scale,
+    z: depth,
+    s: scale,
+  };
+}
+function pullInk(delta, max, touch) {
+  const gain = Math.max(0, Math.min(1, Math.abs(delta) / max));
+  const warm = delta >= 0;
+  const r = Math.round((warm ? 148 : 90) + ((warm ? 206 : 148) - (warm ? 148 : 90)) * gain);
+  const g = Math.round((warm ? 78 : 122) + ((warm ? 146 : 168) - (warm ? 78 : 122)) * gain);
+  const b = Math.round((warm ? 62 : 154) + ((warm ? 118 : 186) - (warm ? 62 : 154)) * gain);
+  const alpha = (0.08 + 0.32 * gain) * (touch ? 1 : 0.32);
+  return {
+    stroke: `rgba(${r}, ${g}, ${b}, ${alpha})`,
+    width: 0.55 + 1.25 * gain,
+  };
+}
+function flowPoint(from, to, u, now, salt, bowAmount) {
+  const dx = to.x - from.x;
+  const dy = to.y - from.y;
+  const dz = to.z - from.z;
+  let nx = -dz;
+  let ny = 0.35;
+  let nz = dx;
+  let length = Math.hypot(nx, ny, nz);
+  if (length < 0.001) {
+    nx = 0;
+    ny = -dz;
+    nz = dy;
+    length = Math.hypot(nx, ny, nz) || 1;
+  }
+  const flip = (salt % 2 === 0) ? 1 : -1;
+  const breath = 0.92 + 0.08 * Math.sin(now * 0.0007 + salt);
+  const bow = bowAmount == null
+    ? Math.sin(u * Math.PI) * (0.22 + 0.08 * Math.sin(now * 0.0009 + salt))
+    : Math.sin(u * Math.PI) * bowAmount * breath * flip;
+  return {
+    x: from.x + dx * u + (nx / length) * bow,
+    y: from.y + dy * u + (ny / length) * bow,
+    z: from.z + dz * u + (nz / length) * bow,
+  };
+}
+function lerpAngle(a, b, t) {
+  const d = Math.atan2(Math.sin(b - a), Math.cos(b - a));
+  return a + d * t;
+}
+function ease(t) {
+  return t < 0.5 ? 2 * t * t : 1 - ((-2 * t + 2) ** 2) / 2;
+}
+function laserU(t, salt) {
+  const delay = (salt % 5) * 0.025;
+  return Math.max(0, Math.min(1, (t - delay) / (0.9 - delay)));
+}
+function anglesOf(event, t) {
+  if (event.type === "hold") return event.theta;
+  const clamped = Math.min(1, t);
+  if (event.type === "reset") {
+    const eased = ease(clamped);
+    return event.from.map((angle, index) => lerpAngle(angle, event.to[index], eased));
+  }
+  const wordT = ease(clamped);
+  return event.from.map((angle, index) => {
+    let next = angle + event.drive[index] * wordT;
+    for (const hit of event.hits[index]) {
+      const along = laserU(clamped, hit.source);
+      const arrive = along < 0.58 ? 0 : ease((along - 0.58) / 0.42);
+      next += hit.delta * arrive;
+    }
+    return Math.atan2(Math.sin(next), Math.cos(next));
+  });
+}
+function wheelName(index) {
+  const group = GROUPS[index];
+  const names = { word: "Word wheel", slow: "Slow clock", stamp: "Stamp clock", arc: "Arc wheel" };
+  const ordinal = GROUPS.slice(0, index + 1).filter((item) => item === group).length;
+  const totals = TOTALS;
+  return `${names[group]} ${ordinal} of ${totals[group]}`;
+}
+function signedDeg(from, to) {
+  return Math.round(Math.atan2(Math.sin(to - from), Math.cos(to - from)) * (180 / Math.PI));
+}
+function describeWheel(event, theta) {
+  if (selected == null) {
+    wheelEl.hidden = true;
+    wheelWords.dataset.key = "";
+    wheelSlot.textContent = "";
+    return;
+  }
+  wheelEl.hidden = false;
+  wheelTitle.textContent = wheelName(selected);
+  showKnownWords(theta, selected);
+  const line = slotLine(theta, event.catalog);
+  if (wheelSlot.textContent !== line) wheelSlot.textContent = line;
+  const off = Math.round(Math.abs(theta[selected]) * (180 / Math.PI));
+  if (event.mode === "Kick" && hands) {
+    const turn = signedDeg(event.from[selected], theta[selected]);
+    const turned = `${turn > 0 ? "+" : ""}${turn}°`;
+    const body = selected === hands.index
+      ? `You turned this arrow ${turned}. That pull reaches the other wheels. This arrow scores “${hands.answer.word}”.`
+      : `Your kick turned this arrow ${turned}. It is ${off}° off its own zero.`;
+    if (wheelBody.textContent !== body) wheelBody.textContent = body;
+    return;
+  }
+  const where = event.mode === "Recall" ? "Recall" : "Training";
+  const word = event.piece === "Rest" ? "rest" : `“${event.piece}”`;
+  let body = `${where}, on ${word}. The arrow is ${off}° off its own zero.`;
+  if (event.type === "kick") {
+    const turn = signedDeg(event.from[selected], theta[selected]);
+    const pool = event.field && event.field.length ? event.field : event.lasers;
+    const pullsOn = pool
+      .filter((laser) => laser.target === selected)
+      .sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta))
+      .slice(0, 3);
+    const pullsBy = pool
+      .filter((laser) => laser.source === selected)
+      .sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta))
+      .slice(0, 3);
+    const clock = event.mode === "Kick" ? "resolution" : event;
+    if (dtFor(selected, clock) === 0) {
+      body += " This word does not step this wheel, so the pulls do not turn it.";
+    } else {
+      body += ` This word has turned it ${turn > 0 ? "+" : ""}${turn}° so far.`;
+      body += pullsOn.length
+        ? ` ${pullsOn.map((laser) => `${wheelName(laser.source)} pulls it ${signedDeg(0, laser.delta) > 0 ? "+" : ""}${signedDeg(0, laser.delta)}°`).join(". ")}.`
+        : " No strong pull lands on it. The word itself turns the arrow.";
+      if (pullsBy.length) {
+        body += ` It pulls ${pullsBy.map((laser) => `${wheelName(laser.target)} ${signedDeg(0, laser.delta) > 0 ? "+" : ""}${signedDeg(0, laser.delta)}°`).join(", ")}.`;
+      }
+    }
+  } else if (event.type === "reset") {
+    body = `${where}, the end piece. This arrow is swinging back to its own zero, ${off}° away.`;
+  } else {
+    body = `${where}, held at rest. This arrow sits on its own zero until the next word.`;
+  }
+  if (wheelBody.textContent !== body) wheelBody.textContent = body;
+}
+function meanAbs(theta) {
+  const sum = theta.reduce((total, angle) => total + Math.abs(angle), 0);
+  return (sum / theta.length) * (180 / Math.PI);
+}
+
+function shelfStories() {
+  return preparedStories();
+}
+function knownWords(theta, index, limit = 10) {
+  const byWord = new Map();
+  for (const story of shelfStories()) {
+    for (const piece of story.pieces) {
+      const word = piece.text.trim();
+      if (word.length < 3 || piece.kind === "end") continue;
+      const key = word.toLowerCase();
+      const score = Math.abs(wordDriveAt(theta, word, index));
+      const prior = byWord.get(key);
+      if (!prior) {
+        byWord.set(key, { word, score, stories: [story.name] });
+      } else if (!prior.stories.includes(story.name)) {
+        prior.stories.push(story.name);
+        if (score > prior.score) {
+          prior.score = score;
+          prior.word = word;
+        }
+      } else if (score > prior.score) {
+        prior.score = score;
+      }
+    }
+  }
+  return [...byWord.values()].sort((a, b) => b.score - a.score).slice(0, limit);
+}
+function showKnownWords(theta, index) {
+  const words = knownWords(theta, index);
+  const key = words.map((item) => `${item.word}:${item.stories.join(",")}`).join("|");
+  if (wheelWords.dataset.key === key) return;
+  wheelWords.dataset.key = key;
+  wheelWords.innerHTML = words.map((item) => (
+    `<li><span class="word">${item.word}</span><span class="from">${item.stories.join(" · ")}</span></li>`
+  )).join("");
+}
+function answerFor(theta, index) {
+  let best = null;
+  let bestScore = -1;
+  for (const story of shelfStories()) {
+    story.pieces.forEach((piece, pieceIndex) => {
+      const word = piece.text.trim();
+      if (word.length < 3 || piece.kind === "end") return;
+      const score = Math.abs(wordDriveAt(theta, word, index));
+      if (score > bestScore) {
+        bestScore = score;
+        best = { word, story: story.name, pieceIndex, pieces: story.pieces };
+      }
+    });
+  }
+  if (!best) {
+    return { word: "…", fragment: "", story: "", pieces: [], spoken: -1 };
+  }
+  let start = best.pieceIndex;
+  while (start > 0 && !/[.!]$/.test(best.pieces[start - 1].text.trim())) start -= 1;
+  let end = best.pieceIndex;
+  while (end < best.pieces.length - 1 && !/[.!]/.test(best.pieces[end].text)) end += 1;
+  const fragment = best.pieces.slice(start, end + 1).map((piece) => piece.text.trim()).filter(Boolean).join(" ");
+  return {
+    word: best.word,
+    fragment,
+    story: best.story,
+    pieces: best.pieces,
+    spoken: best.pieceIndex,
+  };
+}
+function fragmentBearers(theta, answer, skipIndex) {
+  const seen = new Set([answer.word.toLowerCase()]);
+  const words = [];
+  for (const raw of answer.fragment.split(/\s+/)) {
+    const word = raw.replace(/[^A-Za-z']/g, "");
+    const key = word.toLowerCase();
+    if (word.length < 3 || seen.has(key)) continue;
+    seen.add(key);
+    words.push(word);
+  }
+  const claimed = new Set([skipIndex]);
+  const bearers = [];
+  for (const word of words) {
+    let best = -1;
+    let bestScore = -1;
+    for (let index = 0; index < N; index += 1) {
+      if (claimed.has(index)) continue;
+      const score = Math.abs(wordDriveAt(theta, word, index));
+      if (score > bestScore) {
+        bestScore = score;
+        best = index;
+      }
+    }
+    if (best < 0) continue;
+    claimed.add(best);
+    bearers.push({ index: best, word });
+  }
+  return bearers;
+}
+function currentPose() {
+  const event = events[eventIndex];
+  const t = event.ms ? eventTime / event.ms : 1;
+  return {
+    theta: anglesOf(event, t).slice(),
+    pos: placesOf(event, t).map((point) => ({ x: point.x, y: point.y, z: point.z })),
+  };
+}
+function poseKick(baseTheta, basePos, index, spin) {
+  const theta = baseTheta.slice();
+  theta[index] = Math.atan2(Math.sin(baseTheta[index] + spin), Math.cos(baseTheta[index] + spin));
+  const pos = basePos.map((point) => ({ x: point.x, y: point.y, z: point.z }));
+  const field = [];
+  const hits = Array.from({ length: N }, () => []);
+  const gain = 0.55 + Math.min(1.8, Math.abs(spin) * 1.15);
+  for (let target = 0; target < N; target += 1) {
+    if (target === index) continue;
+    const pull = couple(target, index) * Math.sin(theta[index] - baseTheta[target]);
+    const delta = Math.max(-0.6, Math.min(0.6, dtFor(target, "resolution") * PEER_GAIN * pull * gain));
+    if (Math.abs(delta) < 0.012) continue;
+    theta[target] = Math.atan2(Math.sin(baseTheta[target] + delta), Math.cos(baseTheta[target] + delta));
+    field.push({ source: index, target, delta });
+  }
+  field.sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta));
+  const lasers = field.slice(0, 24);
+  for (const pull of lasers) hits[pull.target].push(pull);
+  const origin = pos[index];
+  for (const pull of lasers) {
+    const dst = pos[pull.target];
+    const dx = origin.x - dst.x;
+    const dy = origin.y - dst.y;
+    const dz = origin.z - dst.z;
+    const span = Math.hypot(dx, dy, dz) || 1;
+    const travel = Math.min(0.2, span * 0.12) * Math.min(1, Math.abs(pull.delta) / 0.35);
+    const sign = pull.delta >= 0 ? 1 : -1;
+    dst.x += (dx / span) * travel * sign;
+    dst.y += (dy / span) * travel * sign;
+    dst.z += (dz / span) * travel * sign;
+  }
+  const drive = Array(N).fill(0);
+  drive[index] = spin;
+  const answer = answerFor(theta, index);
+  return {
+    index,
+    spin,
+    baseTheta,
+    basePos,
+    theta,
+    pos,
+    field: field.slice(0, 80),
+    lasers,
+    hits,
+    drive,
+    answer,
+    bearers: fragmentBearers(theta, answer, index),
+  };
+}
+function holdKick(index, spin) {
+  playing = false;
+  pauseBtn.textContent = "Play";
+  const pose = currentPose();
+  hands = { index, spin: 0, baseTheta: pose.theta, basePos: pose.pos };
+  Object.assign(hands, poseKick(pose.theta, pose.pos, index, spin));
+  selected = index;
+  storyEl.dataset.rendered = "";
+}
+function releaseKick() {
+  if (!hands) return;
+  hands = null;
+  storyEl.dataset.rendered = "";
+}
+function drawBearerWord(at, word) {
+  ctx.save();
+  ctx.font = "600 18px Palatino, Georgia, serif";
+  ctx.fillStyle = "#f6efe4";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "bottom";
+  ctx.fillText(word, at.x, at.y - 14);
+  ctx.restore();
+}
+function drawSpew(at, answer) {
+  const word = answer.word;
+  const line = answer.fragment.length > 46 ? `${answer.fragment.slice(0, 44)}…` : answer.fragment;
+  ctx.save();
+  ctx.font = "600 26px Palatino, Georgia, serif";
+  const wordWidth = ctx.measureText(word).width;
+  const left = at.x + wordWidth + 28 > canvas.width ? at.x - wordWidth - 18 : at.x + 16;
+  ctx.fillStyle = "#f6efe4";
+  ctx.textBaseline = "bottom";
+  ctx.fillText(word, left, at.y - 4);
+  ctx.font = "15px Palatino, Georgia, serif";
+  ctx.fillStyle = "rgba(228, 210, 186, 0.92)";
+  ctx.textBaseline = "top";
+  ctx.fillText(line, left, at.y + 4);
+  ctx.restore();
+}
+
+function deposit(event) {
+  if (!event.deposit || !event.toPos) return;
+  let marked = 0;
+  event.toPos.forEach((at, wheel) => {
+    const from = event.fromPos[wheel];
+    const moved = Math.hypot(at.x - from.x, at.y - from.y, at.z - from.z);
+    if (moved < 0.08) return;
+    if (wheel % 11 !== 0 && moved < 0.18) return;
+    splats.push({
+      x: from.x + (at.x - from.x) * 0.55,
+      y: from.y + (at.y - from.y) * 0.55,
+      z: from.z + (at.z - from.z) * 0.55,
+      amount: event.amount * 0.7,
+    });
+    marked += 1;
+  });
+  if (marked) inkTotal += event.amount;
+  if (splats.length > 1600) splats.splice(0, splats.length - 1600);
+}
+
+function drawArrow(at, angle, group, from, answering, picked, lit) {
+  const glyph = N >= 512 ? 0.008 : N >= 256 ? 0.014 : 0.028;
+  const radius = Math.max(N >= 512 ? 1.25 : 1.7, glyph * at.s);
+  ctx.save();
+  ctx.translate(at.x, at.y);
+  ctx.fillStyle = "rgba(18, 17, 14, 0.88)";
+  ctx.strokeStyle = answering > 0.2 ? "#e7b48a" : "#f3efe6";
+  ctx.lineWidth = Math.max(0.7, radius * 0.16);
+  ctx.beginPath();
+  ctx.arc(0, 0, radius, 0, Math.PI * 2);
+  ctx.fill();
+  if (group === "slow") ctx.lineWidth = Math.max(1.15, radius * 0.28);
+  ctx.stroke();
+  if (group === "stamp") {
+    ctx.beginPath();
+    ctx.arc(0, 0, radius + Math.max(1.4, radius * 0.45), 0, Math.PI * 2);
+    ctx.lineWidth = Math.max(0.8, radius * 0.08);
+    ctx.stroke();
+  }
+  if (group === "arc") {
+    ctx.beginPath();
+    const s = radius * 0.55;
+    ctx.moveTo(0, -s);
+    ctx.lineTo(s, 0);
+    ctx.lineTo(0, s);
+    ctx.lineTo(-s, 0);
+    ctx.closePath();
+    ctx.stroke();
+  }
+  ctx.strokeStyle = "rgba(243, 239, 230, 0.45)";
+  ctx.lineWidth = Math.max(0.8, radius * 0.08);
+  ctx.beginPath();
+  ctx.moveTo(0, -radius);
+  ctx.lineTo(0, -radius - Math.max(1.2, radius * 0.4));
+  ctx.stroke();
+  if (from !== undefined) {
+    const sweep = Math.atan2(Math.sin(angle - from), Math.cos(angle - from));
+    ctx.strokeStyle = "rgba(196, 122, 62, 0.85)";
+    ctx.lineWidth = Math.max(0.8, radius * 0.2);
+    ctx.beginPath();
+    ctx.arc(0, 0, radius * 0.62, -Math.PI / 2 + from, -Math.PI / 2 + from + sweep, sweep < 0);
+    ctx.stroke();
+  }
+  const hx = Math.sin(angle);
+  const hy = -Math.cos(angle);
+  const tipX = hx * radius * 0.84;
+  const tipY = hy * radius * 0.84;
+  ctx.strokeStyle = "#f3efe6";
+  ctx.fillStyle = "#f3efe6";
+  ctx.lineWidth = Math.max(0.8, radius * 0.18);
+  ctx.beginPath();
+  ctx.moveTo(0, 0);
+  ctx.lineTo(tipX, tipY);
+  ctx.stroke();
+  const head = Math.max(1.6, radius * 0.42);
+  ctx.beginPath();
+  ctx.moveTo(tipX, tipY);
+  ctx.lineTo(tipX - hx * head + -hy * head * 0.55, tipY - hy * head + hx * head * 0.55);
+  ctx.lineTo(tipX - hx * head - -hy * head * 0.55, tipY - hy * head - hx * head * 0.55);
+  ctx.closePath();
+  ctx.fill();
+  if (picked) {
+    ctx.strokeStyle = "#c47a3e";
+    ctx.lineWidth = Math.max(1.4, radius * 0.14);
+    ctx.beginPath();
+    ctx.arc(0, 0, radius + 3.2, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+  if (lit) {
+    ctx.strokeStyle = "#f6efe4";
+    ctx.lineWidth = Math.max(2.4, radius * 0.5);
+    ctx.beginPath();
+    ctx.arc(0, 0, radius + 6, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function render(now) {
+  resize();
+  const dt = Math.min(48, now - lastStamp);
+  lastStamp = now;
+  if (!dragging) yaw += dt * 0.000012;
+  if (playing && !hands) eventTime += dt;
+  let event = events[eventIndex];
+  while (playing && !hands && event && eventTime >= event.ms) {
+    eventTime -= event.ms;
+    if (event.type === "kick") deposit(event);
+    if (eventIndex < events.length - 1) {
+      eventIndex += 1;
+      event = events[eventIndex];
+    } else {
+      playing = false;
+      pauseBtn.textContent = "Play";
+      break;
+    }
+  }
+  let t = event.ms ? eventTime / event.ms : 1;
+  let theta = anglesOf(event, t);
+  let places = placesOf(event, t).map((point, index) => place(point, index, now));
+  if (hands) {
+    event = {
+      type: "kick",
+      mode: "Kick",
+      title: "Your kick",
+      piece: hands.answer.word,
+      note: `You turned ${wheelName(hands.index)}. The lines are that pull.`,
+      story: hands.answer.pieces,
+      spoken: hands.answer.spoken,
+      from: hands.baseTheta,
+      hits: hands.hits,
+      drive: hands.drive,
+      lasers: hands.lasers,
+      field: hands.field,
+      kind: "resolution",
+      ms: 1,
+      catalog: events[eventIndex].catalog,
+    };
+    t = (now % 1200) / 1200;
+    theta = hands.theta;
+    places = hands.pos.map((point, index) => place(point, index, now));
+  }
+  const cam = view();
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = "#12110e";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  const sprites = [];
+  for (const mote of DUST) {
+    const at = project(mote, cam);
+    if (at) sprites.push({ ...at, amount: mote.amount, radius: 0.05, ink: false });
+  }
+  for (const mote of splats) {
+    const at = project(mote, cam);
+    if (at) sprites.push({ ...at, amount: mote.amount, radius: 0.1, ink: true });
+  }
+  sprites.sort((a, b) => b.z - a.z);
+  for (const sprite of sprites) {
+    const fade = Math.max(0.3, Math.min(1, 4.2 / sprite.z));
+    if (sprite.streak) {
+      ctx.strokeStyle = `rgba(255, 214, 160, ${sprite.amount * fade})`;
+      ctx.lineWidth = Math.max(1.6, 0.012 * sprite.s);
+      ctx.lineCap = "round";
+      ctx.beginPath();
+      ctx.moveTo(sprite.x2, sprite.y2);
+      ctx.lineTo(sprite.x, sprite.y);
+      ctx.stroke();
+      continue;
+    }
+    const radius = Math.max(1.5, sprite.radius * sprite.s);
+    ctx.fillStyle = sprite.ink
+      ? `rgba(196, 122, 62, ${sprite.amount * fade})`
+      : `rgba(214, 196, 168, ${sprite.amount * fade})`;
+    ctx.beginPath();
+    ctx.arc(sprite.x, sprite.y, radius, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  if (event.type === "kick" && showField.checked && event.field.length) {
+    const strong = new Set(event.lasers.map((laser) => `${laser.source}:${laser.target}`));
+    let pullMax = 0.02;
+    for (const pull of event.field) pullMax = Math.max(pullMax, Math.abs(pull.delta));
+    for (const laser of event.lasers) pullMax = Math.max(pullMax, Math.abs(laser.delta));
+    let pulls = event.field;
+    if (selected == null && pulls.length > 110) {
+      const stride = Math.ceil(pulls.length / 110);
+      pulls = pulls.filter((_, index) => index % stride === 0);
+    }
+    ctx.lineCap = "round";
+    for (const pull of pulls) {
+      const fromMe = selected === pull.source;
+      const toMe = selected === pull.target;
+      if (selected != null && !fromMe && !toMe) continue;
+      const key = `${pull.source}:${pull.target}`;
+      if (strong.has(key) && showActing.checked && selected == null) continue;
+      const source = places[pull.source];
+      const target = places[pull.target];
+      const full = selected != null && fromMe;
+      const span = Math.hypot(target.x - source.x, target.y - source.y, target.z - source.z) || 1;
+      const bow = span * (full ? 0.55 : 0.42);
+      ctx.beginPath();
+      let started = false;
+      ctx.lineJoin = "round";
+      for (let step = 0; step <= 12; step += 1) {
+        const u = step / 12;
+        const at = project(flowPoint(source, target, u, now, pull.source + 90, bow), cam);
+        if (!at) continue;
+        if (!started) {
+          ctx.moveTo(at.x, at.y);
+          started = true;
+        } else ctx.lineTo(at.x, at.y);
+      }
+      const ink = pullInk(pull.delta, pullMax, selected == null || fromMe || toMe);
+      ctx.strokeStyle = ink.stroke;
+      ctx.lineWidth = ink.width * (full ? 1.15 : 1);
+      ctx.stroke();
+    }
+  }
+
+  if (showActing.checked && event.type === "kick" && event.lasers.length) {
+    let pullMax = 0.02;
+    for (const pull of event.field || []) pullMax = Math.max(pullMax, Math.abs(pull.delta));
+    for (const laser of event.lasers) pullMax = Math.max(pullMax, Math.abs(laser.delta));
+    ctx.lineCap = "round";
+    for (const laser of event.lasers) {
+      const source = places[laser.source];
+      const target = places[laser.target];
+      const touch = selected == null || laser.source === selected || laser.target === selected;
+      const gain = Math.abs(laser.delta) / pullMax;
+      const ink = pullInk(laser.delta, pullMax, touch);
+      const along = laserU(Math.min(1, t), laser.source);
+      ctx.beginPath();
+      let started = false;
+      for (let step = 0; step <= 12; step += 1) {
+        const at = project(flowPoint(source, target, step / 12, now, laser.source), cam);
+        if (!at) continue;
+        if (!started) {
+          ctx.moveTo(at.x, at.y);
+          started = true;
+        } else ctx.lineTo(at.x, at.y);
+      }
+      ctx.strokeStyle = ink.stroke;
+      ctx.globalAlpha = 0.45;
+      ctx.lineWidth = Math.max(0.6, ink.width * 0.55);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+      const headU = 0.06 + along * 0.82;
+      const head = project(flowPoint(source, target, headU, now, laser.source), cam);
+      const tail = project(flowPoint(source, target, Math.max(0, headU - 0.2), now, laser.source), cam);
+      if (!head || !tail) continue;
+      ctx.strokeStyle = ink.stroke;
+      ctx.lineWidth = ink.width;
+      ctx.beginPath();
+      ctx.moveTo(tail.x, tail.y);
+      ctx.lineTo(head.x, head.y);
+      ctx.stroke();
+      const dx = head.x - tail.x;
+      const dy = head.y - tail.y;
+      const length = Math.hypot(dx, dy) || 1;
+      const ux = dx / length;
+      const uy = dy / length;
+      const tip = 5 + gain * 4;
+      ctx.fillStyle = ink.stroke;
+      ctx.beginPath();
+      ctx.moveTo(head.x, head.y);
+      ctx.lineTo(head.x - ux * tip - uy * tip * 0.45, head.y - uy * tip + ux * tip * 0.45);
+      ctx.lineTo(head.x - ux * tip + uy * tip * 0.45, head.y - uy * tip - ux * tip * 0.45);
+      ctx.closePath();
+      ctx.fill();
+    }
+  }
+
+  const wheels = places
+    .map((point, index) => ({ index, at: project(point, cam) }))
+    .filter((wheel) => wheel.at)
+    .sort((a, b) => b.at.z - a.at.z);
+  hitTargets.length = 0;
+  let spewAt = null;
+  const bearerAt = new Map();
+  if (hands && hands.bearers) {
+    for (const bearer of hands.bearers) bearerAt.set(bearer.index, bearer.word);
+  }
+  for (const wheel of wheels) {
+    const from = event.type === "hold" ? undefined : event.from[wheel.index];
+    let answering = 0;
+    if (event.type === "kick") {
+      for (const hit of event.hits[wheel.index]) {
+        const along = laserU(Math.min(1, t), hit.source);
+        const arrive = along < 0.58 ? 0 : (along - 0.58) / 0.42;
+        answering = Math.max(answering, Math.sin(Math.min(1, arrive) * Math.PI) * Math.min(1, Math.abs(hit.delta) * 2.4));
+      }
+    }
+    const picked = wheel.index === selected;
+    const bearerWord = bearerAt.get(wheel.index);
+    drawArrow(wheel.at, theta[wheel.index], GROUPS[wheel.index], from, answering || (picked ? 0.35 : 0) || (bearerWord ? 0.85 : 0), picked, Boolean(bearerWord));
+    if (bearerWord) bearerAt.set(wheel.index, { word: bearerWord, at: wheel.at });
+    if (hands && wheel.index === hands.index) spewAt = wheel.at;
+    hitTargets.push({
+      index: wheel.index,
+      x: wheel.at.x,
+      y: wheel.at.y,
+      r: Math.max(N >= 512 ? 5.5 : 8, (N >= 512 ? 0.008 : 0.016) * wheel.at.s + 5),
+    });
+  }
+  if (spewAt && hands) drawSpew(spewAt, hands.answer);
+  if (hands && hands.bearers) {
+    for (const bearer of hands.bearers) {
+      const placed = bearerAt.get(bearer.index);
+      if (placed && placed.at) drawBearerWord(placed.at, placed.word);
+    }
+  }
+
+  describeWheel(event, theta);
+
+  modeEl.textContent = event.title || event.mode;
+  pieceEl.textContent = event.piece;
+  noteEl.textContent = event.note;
+  const spread = meanAbs(theta);
+  spreadEl.textContent = `${Math.round(spread)}°`;
+  spreadBar.style.width = `${Math.min(100, spread / 90 * 100)}%`;
+  inkEl.textContent = String(Math.round(inkTotal * 10));
+  inkBar.style.width = `${Math.min(100, (inkTotal * 10) / 160 * 100)}%`;
+  const html = (event.story || [])
+    .filter((piece) => piece.kind !== "end")
+    .map((piece, index) => {
+      const cls = index === event.spoken ? "now" : "";
+      return `<span class="${cls}">${piece.text.replace(/</g, "")}</span>`;
+    })
+    .join("");
+  if (storyEl.dataset.rendered !== `${eventIndex}:${event.spoken}`) {
+    storyEl.innerHTML = html;
+    storyEl.dataset.rendered = `${eventIndex}:${event.spoken}`;
+    const current = storyEl.querySelector(".now");
+    if (current) current.scrollIntoView({ block: "nearest" });
+  }
+  if (playing || dragging) queue();
+}
+
+function restart() {
+  releaseKick();
+  selected = null;
+  storyEl.dataset.rendered = "";
+  eventIndex = 0;
+  eventTime = 0;
+  splats.length = 0;
+  trails.length = 0;
+  inkTotal = 0;
+  playing = true;
+  pauseBtn.textContent = "Pause";
+  lastStamp = performance.now();
+  queue();
+}
+function jumpTo(mark) {
+  releaseKick();
+  eventIndex = 0;
+  eventTime = 0;
+  splats.length = 0;
+  trails.length = 0;
+  inkTotal = 0;
+  for (let i = 0; i < events.length; i += 1) {
+    const event = events[i];
+    if (event.type === "kick") deposit(event);
+    if (event.mark === mark) {
+      eventIndex = i;
+      break;
+    }
+    if (i === events.length - 1) eventIndex = i;
+  }
+  playing = true;
+  pauseBtn.textContent = "Pause";
+  lastStamp = performance.now();
+  queue();
+}
+
+pauseBtn.addEventListener("click", () => {
+  if (!playing && hands) releaseKick();
+  playing = !playing;
+  pauseBtn.textContent = playing ? "Pause" : "Play";
+    if (playing) {
+      lastStamp = performance.now();
+      queue();
+    }
+});
+document.getElementById("restart").addEventListener("click", restart);
+document.getElementById("recall").addEventListener("click", () => jumpTo("recall"));
+document.getElementById("reset").addEventListener("click", restart);
+document.querySelectorAll(".sizes button").forEach((button) => {
+  button.addEventListener("click", () => {
+    const count = Number(button.dataset.wheels);
+    if (count === N) return;
+    document.querySelectorAll(".sizes button").forEach((other) => {
+      other.setAttribute("aria-pressed", other === button ? "true" : "false");
+    });
+    selected = null;
+    storyEl.dataset.rendered = "";
+    buildBag(count);
+    restart();
+  });
+});
+for (const box of [showActing, showField]) {
+  box.addEventListener("change", () => {
+    if (!playing) queue();
+  });
+}
+window.addEventListener("resize", () => {
+  resize();
+  if (!playing) queue();
+});
+window.addEventListener("keydown", (event) => {
+  if (event.key === " " && event.target === document.body) {
+    event.preventDefault();
+    pauseBtn.click();
+  }
+});
+function wheelAt(event) {
+  const rect = canvas.getBoundingClientRect();
+  if (!rect.width || !rect.height) return null;
+  const x = (event.clientX - rect.left) * (canvas.width / rect.width);
+  const y = (event.clientY - rect.top) * (canvas.height / rect.height);
+  let best = null;
+  let bestDist = Infinity;
+  for (const wheel of hitTargets) {
+    const distTo = Math.hypot(wheel.x - x, wheel.y - y);
+    if (distTo <= wheel.r * 1.35 && distTo < bestDist) {
+      best = wheel.index;
+      bestDist = distTo;
+    }
+  }
+  return best;
+}
+canvas.addEventListener("pointerdown", (event) => {
+  dragging = false;
+  pointerTravel = 0;
+  dragX = event.clientX;
+  dragY = event.clientY;
+  grab = wheelAt(event);
+  canvas.setPointerCapture(event.pointerId);
+});
+canvas.addEventListener("pointermove", (event) => {
+  if (!canvas.hasPointerCapture(event.pointerId)) {
+    canvas.style.cursor = wheelAt(event) == null ? "grab" : "pointer";
+    return;
+  }
+  const dx = event.clientX - dragX;
+  const dy = event.clientY - dragY;
+  pointerTravel += Math.hypot(dx, dy);
+  dragX = event.clientX;
+  dragY = event.clientY;
+  if (pointerTravel < 6) return;
+  dragging = true;
+  canvas.classList.add("dragging");
+  if (grab != null) {
+    if (!hands || hands.index !== grab) {
+      const pose = currentPose();
+      playing = false;
+      pauseBtn.textContent = "Play";
+      hands = { index: grab, spin: 0, baseTheta: pose.theta, basePos: pose.pos };
+      selected = grab;
+      storyEl.dataset.rendered = "";
+    }
+    hands.spin += dx * 0.02;
+    Object.assign(hands, poseKick(hands.baseTheta, hands.basePos, hands.index, hands.spin));
+    queue();
+    return;
+  }
+  yaw -= dx * 0.006;
+  pitch = Math.max(-1.15, Math.min(1.15, pitch + dy * 0.005));
+  if (!playing) queue();
+});
+canvas.addEventListener("pointerup", (event) => {
+  const click = pointerTravel < 6;
+  dragging = false;
+  canvas.classList.remove("dragging");
+  if (canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId);
+  grab = null;
+  if (!click) return;
+  const hit = wheelAt(event);
+  selected = hit === selected ? null : hit;
+  if (!playing) queue();
+});
+canvas.addEventListener("pointercancel", () => {
+  dragging = false;
+  canvas.classList.remove("dragging");
+});
+canvas.addEventListener("wheel", (event) => {
+  event.preventDefault();
+  dist = Math.max(2.1, Math.min(8.5, dist * (event.deltaY > 0 ? 1.07 : 0.93)));
+  if (!playing) queue();
+}, { passive: false });
+
+function advance(ms) {
+  let left = ms;
+  while (left > 0 && eventIndex < events.length - 1) {
+    const event = events[eventIndex];
+    const remain = event.ms - eventTime;
+    if (left < remain) {
+      eventTime += left;
+      left = 0;
+    } else {
+      left -= remain;
+      if (event.type === "kick") deposit(event);
+      eventIndex += 1;
+      eventTime = 0;
+    }
+  }
+  playing = false;
+  pauseBtn.textContent = "Play";
+  lastStamp = performance.now();
+  render(performance.now());
+}
+
+window.demo = {
+  jumpTo,
+  restart,
+  advance,
+  pause() {
+    playing = false;
+    pauseBtn.textContent = "Play";
+    render(performance.now());
+  },
+  snapshot() {
+    const event = events[eventIndex];
+    const theta = anglesOf(event, event.ms ? eventTime / event.ms : 1);
+    const spread = theta.reduce((total, angle) => total + Math.abs(angle), 0) / theta.length;
+    return {
+      index: eventIndex,
+      title: event.title,
+      piece: event.piece,
+      note: event.note,
+      ink: Math.round(inkTotal * 10),
+      splats: splats.length,
+      recall: Boolean(event.recall),
+      mode: event.mode,
+      spread: Math.round(spread * (180 / Math.PI)),
+      lasers: event.lasers ? event.lasers.length : 0,
+      turn: event.type === "kick"
+        ? Math.round(Math.max(...theta.map((angle, index) => Math.abs(Math.atan2(Math.sin(angle - event.from[index]), Math.cos(angle - event.from[index]))))) * (180 / Math.PI))
+        : 0,
+      slots: event.catalog ? event.catalog.filled : 0,
+    };
+  },
+  recallText() {
+    return events
+      .filter((event) => event.recall && event.type === "kick")
+      .map((event) => event.piece)
+      .join(" ");
+  },
+  select(index) {
+    selected = index;
+    render(performance.now());
+  },
+  wheelText() {
+    if (wheelEl.hidden) return "";
+    const words = [...wheelWords.querySelectorAll(".word")].map((item) => item.textContent).join(", ");
+    return `${wheelTitle.textContent}\n${wheelBody.textContent}\n${wheelSlot.textContent}\n${words}`;
+  },
+  kick(index, spin) {
+    holdKick(index, spin);
+    render(performance.now());
+    const hit = clickSlot(hands.theta, events[eventIndex].catalog);
+    return {
+      word: hands.answer.word,
+      fragment: hands.answer.fragment,
+      story: hands.answer.story,
+      pulled: hands.field.length,
+      bearers: hands.bearers.map((bearer) => bearer.word),
+      bearerOnPull: hands.bearers.filter((bearer) => hands.lasers.some((laser) => laser.target === bearer.index)).length,
+      slot: hit.slot,
+      slotLine: wheelSlot.textContent,
+    };
+  },
+};
+
+resize();
+queue();
+</script>
+</body>
+</html>
