@@ -1354,3 +1354,135 @@ def test_repetition_penalty_follows_english_weights() -> None:
     assert float(out[2]) == pytest.approx(-2.0)
     assert float(out[3]) == pytest.approx(4.0)
     assert float(out[4]) == pytest.approx(2.0)
+
+
+def test_raw_lead_survives_repetition_tax() -> None:
+    """A lead of about 1.2 to 2.6 stays. Three identical uses still take the tax."""
+    pytest.importorskip("mlx")
+    import mlx.core as mx
+
+    from sidecar.train_mlx import apply_repetition_penalty
+
+    itos = [" alpha", " beta", " gamma", " delta", " the"]
+    # One use, gap 1.21. The tax would divide 22.44 by 1.3 and lose the seat.
+    once = apply_repetition_penalty(mx.array([22.44, 21.23, 0.0, 0.0, 0.0]), [0], 1.3, itos)
+    mx.eval(once)
+    assert int(mx.argmax(once).item()) == 0
+    assert float(once[0]) == pytest.approx(22.44)
+
+    # Gap 1.20, the other measured lead the tax was flipping.
+    narrow = apply_repetition_penalty(mx.array([0.0, 24.48, 23.28, 0.0, 0.0]), [1], 1.3, itos)
+    mx.eval(narrow)
+    assert int(mx.argmax(narrow).item()) == 1
+    assert float(narrow[1]) == pytest.approx(24.48)
+
+    # Gap 2.58. Still inside the measured band, so the raw top stays.
+    wider = apply_repetition_penalty(mx.array([0.0, 0.0, 23.17, 25.75, 0.0]), [3], 1.3, itos)
+    mx.eval(wider)
+    assert int(mx.argmax(wider).item()) == 3
+    assert float(wider[3]) == pytest.approx(25.75)
+
+    # The same content word three times in a row. The 1.3 tax takes the seat.
+    pile = apply_repetition_penalty(mx.array([22.44, 21.23, 0.0, 0.0, 0.0]), [0, 0, 0], 1.3, itos)
+    mx.eval(pile)
+    assert float(pile[0]) == pytest.approx(22.44 / 1.3)
+    assert int(mx.argmax(pile).item()) == 1
+
+    # Three uses with other content between them is not a run, so the lead stays.
+    spaced = apply_repetition_penalty(
+        mx.array([22.44, 21.23, 0.0, 1.0, 0.0]),
+        [0, 3, 0, 3, 0],
+        1.3,
+        itos,
+    )
+    mx.eval(spaced)
+    assert int(mx.argmax(spaced).item()) == 0
+
+    # A tight lead still moves. Glue may still take a wide lead, since it is not a content theft.
+    tight = apply_repetition_penalty(mx.array([5.0, 4.8, 0.0, 0.0, 0.0]), [0], 1.3, itos)
+    mx.eval(tight)
+    assert float(tight[0]) == pytest.approx(5.0 / 1.3)
+    assert int(mx.argmax(tight).item()) == 1
+    glued = apply_repetition_penalty(mx.array([22.44, 0.0, 0.0, 0.0, 20.0]), [0], 1.3, itos)
+    mx.eval(glued)
+    assert float(glued[0]) == pytest.approx(22.44 / 1.3)
+    assert int(mx.argmax(glued).item()) == 4
+
+
+def test_glue_does_not_extend_a_ready_sentence() -> None:
+    """Glue within a point of a stop closes a sentence that already has a few pieces."""
+    pytest.importorskip("mlx")
+    import mlx.core as mx
+
+    from sidecar.train_mlx import _case_table, prefer_sentence_end
+
+    itos = [" alpha", " beta", " gamma", " delta", " and", "."]
+    groups, table = _case_table(itos)
+    ready = [0, 1, 2, 3]
+    close = mx.array([0.0, 0.0, 0.0, 0.0, 10.0, 9.5])
+    stopped = prefer_sentence_end(
+        close, itos, groups, table, ready, (5,), previous=" delta"
+    )
+    assert stopped == 5
+
+    short = prefer_sentence_end(
+        close, itos, groups, table, [0, 1], (5,), previous=" beta"
+    )
+    assert short is None
+
+    far = mx.array([0.0, 0.0, 0.0, 0.0, 10.0, 8.5])
+    held = prefer_sentence_end(far, itos, groups, table, ready, (5,), previous=" delta")
+    assert held is None
+
+    content = mx.array([10.0, 0.0, 0.0, 0.0, 0.0, 9.5])
+    kept = prefer_sentence_end(
+        content, itos, groups, table, ready, (5,), previous=" delta"
+    )
+    assert kept is None
+
+    tied = mx.array([10.0, 0.0, 0.0, 0.0, 0.0, 9.9])
+    closed = prefer_sentence_end(
+        tied, itos, groups, table, ready, (5,), previous=" delta"
+    )
+    assert closed == 5
+
+
+def test_dilemma_dwell_slips_the_word_wheels() -> None:
+    """Half a word step moves the fast wheels and leaves the slow clock."""
+    pytest.importorskip("mlx")
+    import mlx.core as mx
+
+    from sidecar.train_mlx import KuramotoMLX, release_dwell
+
+    model = KuramotoMLX(4, n=8, rank=1, n_roots=1, n_slow=2, n_stamp=1, n_arc=0, latch=False)
+    theta = mx.zeros((model.n,))
+    moved = release_dwell(model, theta)
+    mx.eval(moved)
+    fast_end = model.slow.start
+    assert fast_end > 0
+    assert float(moved[0].item()) == pytest.approx(model.dt * 0.5)
+    assert float(moved[fast_end].item()) == pytest.approx(0.0)
+    assert not bool(mx.allclose(moved, theta).item())
+
+
+def test_bm25_list_remembers_the_rare_window(tmp_path: Path) -> None:
+    """A rare opening keeps its own next piece, and the saved list loads back."""
+    from sidecar.shelf_route import ShelfRoute
+
+    stories = [
+        [7, 1, 2, 3, 9],
+        [8, 1, 2, 3, 4],
+        [8, 1, 2, 3, 4],
+        [8, 1, 2, 3, 4],
+    ]
+    route = ShelfRoute(stories, window=4)
+    hits = route.successors([7, 1, 2, 3])
+    assert hits[0][0] == 9
+    assert hits[0][1] > hits[1][1]
+    assert route.locked_next([7, 1, 2, 3], minimum=4) == 9
+    assert route.locked_next([1, 2, 3], minimum=3) is None
+    assert route.next_sentence([7, 1, 2, 3], {9}) == [9]
+    path = tmp_path / "bm25_shelf.json"
+    route.save(path)
+    loaded = ShelfRoute.load(path, stories)
+    assert loaded.successors([7, 1, 2, 3])[0][0] == 9

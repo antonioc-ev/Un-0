@@ -32,6 +32,7 @@ import mlx.optimizers as optim
 from mlx.utils import tree_flatten, tree_map, tree_unflatten
 import torch
 
+from sidecar.beats import _GLUE as _STOPWORDS
 from sidecar.beats import _content_word
 from sidecar.model import (
     CHARACTER_DRIVE_SCALE,
@@ -44,6 +45,7 @@ from sidecar.model import (
     _clock_split,
 )
 from sidecar.prepare import EOS, case_groups, chunk_ids
+from sidecar.shelf_route import ShelfRoute
 from sidecar.train import (
     DYNAMICS_LR_SCALE,
     GLUE_TARGET_WEIGHT,
@@ -1390,6 +1392,12 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
         shelf = f"cap {STORY_WINDOW}"
     if not stories:
         raise ValueError(f"No story fits in {STORY_WINDOW} pieces.")
+    route = ShelfRoute(stories)
+    route.save(args.data_dir / "bm25_shelf.json")
+    print(
+        f"bm25 {route.windows} windows on {len(stories)} stories, saved bm25_shelf.json",
+        flush=True,
+    )
     labels, canon = label_shelf(stories, itos)
     print_categories(labels, itos)
     seq_len = int(args.seq_len)
@@ -1734,6 +1742,7 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
         length=int(args.sample_length),
         temperature=float(args.sample_temperature),
         repetition_penalty=1.3,
+        route=route,
     )
     elapsed = time.perf_counter() - started
     print(f"sample:\n{text}", flush=True)
@@ -1886,6 +1895,20 @@ def _drain_prefetch(batches: queue.Queue, worker: threading.Thread) -> None:
             return
 
 
+# Content leads the tax was overturning sat between about 1.2 and 2.6.
+# A raw lead above this margin is not handed to another content word.
+_RAW_LEAD_MARGIN = 1.0
+# The same content word three times in a row still takes the full tax.
+_PILEUP_RUN = 3
+# Glue within a point of a stop does not extend a sentence that already has a few pieces.
+_SENTENCE_CLOSE = 1.0
+# A stop this close to the top piece is the same choice, so the sentence ends.
+_SENTENCE_TIE = 0.15
+_SENTENCE_MIN_PIECES = 4
+# Half a word step. Enough to leave a dilemma pose, not enough to replace it.
+_DWELL_SLIP = 0.5
+
+
 def _takes_repetition_tax(piece: str) -> bool:
     """Content words and a paragraph break take the tax.
 
@@ -1907,7 +1930,9 @@ def apply_repetition_penalty(
 ) -> mx.array:
     """Down-weight taxed pieces already used. Glue and sentence marks stay.
 
-    ``Bird`` and ``bird`` are one word, so using either taxes both.
+    ``Bird`` and ``bird`` are one word, so using either taxes both. A raw lead
+    above ``_RAW_LEAD_MARGIN`` is not given to a different content word. The
+    same content word three times in a row keeps the tax.
     """
     if penalty == 1.0 or not seen:
         return logits
@@ -1925,7 +1950,63 @@ def apply_repetition_penalty(
     mask = mx.zeros((logits.shape[0],))
     mask = mask.at[mx.array(list(set(taxed)))].add(1)
     adjusted = mx.where(logits < 0, logits * penalty, logits / penalty)
-    return mx.where(mask > 0, adjusted, logits)
+    taxed_logits = mx.where(mask > 0, adjusted, logits)
+    return _keep_raw_lead(logits, taxed_logits, seen, itos)
+
+
+def _group_scores(logits: mx.array, table: mx.array) -> mx.array:
+    """One score per case group. ``The`` and ``the`` add as one word."""
+    safe = mx.maximum(table, 0)
+    picked = logits[safe]
+    picked = mx.where(table >= 0, picked, mx.full(picked.shape, -1e9))
+    return mx.logsumexp(picked, axis=1)
+
+
+def _repeated_run(seen: list[int], itos: list[str]) -> str:
+    """Return the content word if it was just said ``_PILEUP_RUN`` times."""
+    words: list[str] = []
+    for token in reversed(seen):
+        word = _content_word(itos[token])
+        if not word:
+            continue
+        words.append(word)
+        if len(words) == _PILEUP_RUN:
+            break
+    if len(words) < _PILEUP_RUN or any(word != words[0] for word in words):
+        return ""
+    return words[0]
+
+
+def _keep_raw_lead(
+    raw: mx.array,
+    taxed: mx.array,
+    seen: list[int],
+    itos: list[str],
+) -> mx.array:
+    """Put the raw top back when a content word would take a real lead.
+
+    Glue and sentence marks may still win, and a three-in-a-row pile-up keeps
+    the tax. The margin is the band of leads the tax was flipping, about 1.2
+    to 2.6, so anything tighter than ``_RAW_LEAD_MARGIN`` can still move.
+    """
+    groups, table = _case_table(itos)
+    raw_scores = _group_scores(raw, table)
+    taxed_scores = _group_scores(taxed, table)
+    raw_top = int(mx.argmax(raw_scores).item())
+    taxed_top = int(mx.argmax(taxed_scores).item())
+    if raw_top == taxed_top:
+        return taxed
+    gap = float((raw_scores[raw_top] - raw_scores[taxed_top]).item())
+    if gap <= _RAW_LEAD_MARGIN:
+        return taxed
+    if _content_word(itos[groups[taxed_top][0]]) == "":
+        return taxed
+    raw_word = _content_word(itos[groups[raw_top][0]])
+    if raw_word and _repeated_run(seen, itos) == raw_word:
+        return taxed
+    mask = mx.zeros((raw.shape[0],))
+    mask = mask.at[mx.array(groups[raw_top])].add(1)
+    return mx.where(mask > 0, raw, taxed)
 
 
 def _opens_sentence(piece: str | None) -> bool:
@@ -1978,10 +2059,7 @@ def choose_piece(  # noqa: PLR0913
     ``The`` and ``the`` share one score. After a period the written piece is
     ``The`` when that piece exists. Inside a sentence it is ``the``.
     """
-    safe = mx.maximum(table, 0)
-    picked = logits[safe]
-    picked = mx.where(table >= 0, picked, mx.full(picked.shape, -1e9))
-    scores = mx.logsumexp(picked, axis=1)
+    scores = _group_scores(logits, table)
     if temperature <= 0:
         pick = int(mx.argmax(scores).item())
     else:
@@ -1994,6 +2072,83 @@ def choose_piece(  # noqa: PLR0913
     )
 
 
+def _open_pieces(ids: list[int], boundary_ids: set[int]) -> int:
+    """Count pieces since the last sentence mark. The end piece is not a mark."""
+    count = 0
+    for token in reversed(ids):
+        if token in boundary_ids:
+            break
+        count += 1
+    return count
+
+
+def prefer_sentence_end(  # noqa: PLR0913
+    logits: mx.array,
+    itos: list[str],
+    groups: list[list[int]],
+    table: mx.array,
+    ids: list[int],
+    boundary_ids: tuple[int, ...] | list[int],
+    *,
+    previous: str | None,
+) -> int | None:
+    """Close a sentence that already has a few pieces.
+
+    Glue loses to a stop within a point. Any piece loses when a stop is tied
+    with it. The stop does not land on a single word. The end-of-story piece
+    is not a sentence.
+    """
+    boundary = set(boundary_ids)
+    if _open_pieces(ids, boundary) < _SENTENCE_MIN_PIECES:
+        return None
+    scores = _group_scores(logits, table)
+    top = int(mx.argmax(scores).item())
+    best_group = -1
+    best_score = 0.0
+    found = False
+    for group_index, group in enumerate(groups):
+        if not any(piece in boundary for piece in group):
+            continue
+        score = float(scores[group_index].item())
+        if not found or score > best_score:
+            best_group = group_index
+            best_score = score
+            found = True
+    if not found:
+        return None
+    gap = float(scores[top].item()) - best_score
+    glue = itos[groups[top][0]].strip().casefold() in _STOPWORDS
+    if gap > _SENTENCE_TIE and not (glue and gap <= _SENTENCE_CLOSE):
+        return None
+    return _realize_case(
+        itos,
+        groups[best_group],
+        logits,
+        sentence_start=_opens_sentence(previous),
+    )
+
+
+def release_dwell(model: KuramotoMLX, theta: mx.array) -> mx.array:
+    """Slip the word wheels by half a step so a dilemma pose does not sit still.
+
+    The slow clock, the stamp, and the arc stay put. Half of ``dt`` is a short
+    free phase, so the pose moves and is not replaced.
+    """
+    if model.n_slow:
+        fast_end = model.slow.start
+    elif model.n_stamp:
+        fast_end = model.stamp.start
+    elif model.n_arc:
+        fast_end = model.arc.start
+    else:
+        return theta
+    if fast_end <= 0:
+        return theta
+    delta = mx.zeros_like(theta)
+    delta = delta.at[:fast_end].add(model.dt * _DWELL_SLIP)
+    return mx.arctan2(mx.sin(theta + delta), mx.cos(theta + delta))
+
+
 def _case_table(itos: list[str]) -> tuple[list[list[int]], mx.array]:
     groups = case_groups(itos)
     width = max(len(group) for group in groups)
@@ -2001,7 +2156,95 @@ def _case_table(itos: list[str]) -> tuple[list[list[int]], mx.array]:
     return groups, mx.array(rows)
 
 
-def continue_ids(  # noqa: PLR0913
+_SHELF_NEAR = 12.0
+# The stored next piece stays ahead unless another part in that sentence is clearly better.
+_TELL_ORDER = 5.0
+
+
+def _tell_piece(
+    logits: mx.array,
+    parts: list[int],
+    *,
+    temperature: float,
+) -> int | None:
+    """Say a piece from the retrieved sentence. The stored next piece leads.
+
+    Temperature may pick another part of that same sentence. A word from
+    outside it cannot enter the telling.
+    """
+    if not parts:
+        return None
+    chosen: list[int] = []
+    seen: set[int] = set()
+    weights: list[float] = []
+    planned = parts[0]
+    for tok in parts:
+        if tok in seen or tok < 0 or tok >= logits.shape[0]:
+            continue
+        seen.add(tok)
+        chosen.append(tok)
+        lift = _TELL_ORDER if tok == planned else 0.0
+        weights.append(float(logits[tok].item()) + lift)
+    if not chosen:
+        return None
+    if temperature <= 0:
+        return planned
+    scores = mx.array(weights)
+    pick = int(mx.random.categorical(scores / temperature).item())
+    return chosen[pick]
+
+
+def _click_successor(  # noqa: PLR0913
+    logits: mx.array,
+    itos: list[str],
+    groups: list[list[int]],
+    table: mx.array,
+    hits: list[tuple[int, float]],
+    *,
+    previous: str | None,
+) -> int | None:
+    """Kick the stored next piece when the shelf list is sharp.
+
+    A sharp hit is the piece the matching windows agree on. The wheels then
+    take that kick and rotate onto the stored continuation. A wide list lets
+    the bag pick among those pieces when one of them is already close.
+    """
+    if not hits:
+        return None
+    best_tok, best_score = hits[0]
+    second = hits[1][1] if len(hits) > 1 else 0.0
+    scores = _group_scores(logits, table)
+    group_of = {tok: index for index, group in enumerate(groups) for tok in group}
+    sharp = second <= 0.0 or best_score >= second * 1.35
+    if sharp and best_tok in group_of:
+        return _realize_case(
+            itos,
+            groups[group_of[best_tok]],
+            logits,
+            sentence_start=_opens_sentence(previous),
+        )
+    top = float(mx.max(scores).item())
+    pick = -1
+    pick_score = -1e9
+    for tok, _score in hits:
+        group = group_of.get(tok)
+        if group is None:
+            continue
+        model_score = float(scores[group].item())
+        if top - model_score <= _SHELF_NEAR and model_score > pick_score:
+            pick = group
+            pick_score = model_score
+    if pick < 0:
+        return None
+    return _realize_case(
+        itos,
+        groups[pick],
+        logits,
+        sentence_start=_opens_sentence(previous),
+    )
+
+
+def continue_ids(  # noqa: C901, PLR0913
     model: KuramotoMLX,
     itos: list[str],
     *,
@@ -2014,6 +2257,7 @@ def continue_ids(  # noqa: PLR0913
     character: int = -1,
     dilemma: int = -1,
     canon: list[int] | None = None,
+    route: ShelfRoute | None = None,
 ) -> list[int]:
     """Continue a prompt and return the piece ids, including the opening.
 
@@ -2040,7 +2284,14 @@ def continue_ids(  # noqa: PLR0913
             dilemma=dilemma_now,
             recognition=recognition,
         )
-    for _ in range(length):
+    if seen and dilemma >= 0:
+        theta = release_dwell(model, theta)
+    # A locked shelf ending is short. Finish that ending instead of cutting it.
+    step = 0
+    while step < length + 256:
+        held = route is not None and route.locked_next(ids) is not None
+        if step >= length and not held:
+            break
         shown = model.shown_state(theta[None, :], hold)[0]
         features = mx.concatenate([mx.sin(shown), mx.cos(shown)], axis=-1)
         logits = apply_repetition_penalty(
@@ -2050,14 +2301,45 @@ def continue_ids(  # noqa: PLR0913
             itos,
         )
         previous = None if not ids else itos[ids[-1]]
-        nxt = choose_piece(
+        nxt = None
+        if route is not None and temperature <= 0:
+            locked = route.locked_next(ids)
+            if locked is not None:
+                nxt = locked
+        elif route is not None:
+            nxt = _tell_piece(
+                logits,
+                route.next_sentence(ids, set(model.boundary_ids)),
+                temperature=temperature,
+            )
+        if nxt is None and route is not None and temperature <= 0:
+            nxt = _click_successor(
+                logits,
+                itos,
+                groups,
+                table,
+                route.successors(ids),
+                previous=previous,
+            )
+        if nxt is None:
+            nxt = prefer_sentence_end(
             logits,
             itos,
             groups,
             table,
+            ids,
+            model.boundary_ids,
             previous=previous,
-            temperature=temperature,
         )
+        if nxt is None:
+            nxt = choose_piece(
+                logits,
+                itos,
+                groups,
+                table,
+                previous=previous,
+                temperature=temperature,
+            )
         if eos_id is not None and nxt == eos_id:
             break
         ids.append(nxt)
@@ -2071,6 +2353,7 @@ def continue_ids(  # noqa: PLR0913
             dilemma=dilemma_now,
             recognition=recognition,
         )
+        step += 1
     return ids
 
 
@@ -2087,6 +2370,7 @@ def sample(  # noqa: PLR0913
     character: int = -1,
     dilemma: int = -1,
     canon: list[int] | None = None,
+    route: ShelfRoute | None = None,
 ) -> str:
     """Continue a prompt. Stop on the end piece. Temperature 0 takes the top piece."""
     ids = continue_ids(
@@ -2101,6 +2385,7 @@ def sample(  # noqa: PLR0913
         character=character,
         dilemma=dilemma,
         canon=canon,
+        route=route,
     )
     return "".join(itos[index] for index in ids)
 

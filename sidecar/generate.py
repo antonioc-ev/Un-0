@@ -27,6 +27,7 @@ from sidecar.train_mlx import (
     apply_repetition_penalty,
     choose_piece,
     load_bag_weights,
+    prefer_sentence_end,
     read_bag_meta,
     readout_spec,
     spin,
@@ -109,14 +110,24 @@ def generate(  # noqa: PLR0913
         )
         logits = pull_want(logits, itos, "".join(itos[index] for index in ids), graph_pull, graph)
         previous = None if not ids else itos[ids[-1]]
-        nxt = choose_piece(
+        nxt = prefer_sentence_end(
             logits,
             itos,
             groups,
             table,
+            ids,
+            model.boundary_ids,
             previous=previous,
-            temperature=temperature,
         )
+        if nxt is None:
+            nxt = choose_piece(
+                logits,
+                itos,
+                groups,
+                table,
+                previous=previous,
+                temperature=temperature,
+            )
         if eos_id is not None and nxt == eos_id:
             break
         ids.append(nxt)

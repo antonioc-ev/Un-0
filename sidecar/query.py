@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING
 
 from sidecar.beats import arc_score, holds_cohesion, resolution_span
 from sidecar.prepare import EOS
+from sidecar.shelf_route import ShelfRoute
 from sidecar.train import (
     STORY_WINDOW,
     keep_short_stories,
@@ -70,6 +71,11 @@ def build_parser() -> argparse.ArgumentParser:
         "Glue and sentence marks keep their score. 1.0 leaves every piece.",
     )
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument(
+        "--shelf",
+        action="store_true",
+        help="Also print the kept training story and its character, dilemma, and ending.",
+    )
     parser.add_argument(
         "--from-story",
         type=int,
@@ -123,6 +129,7 @@ def report_cohesion(  # noqa: PLR0913
     length: int,
     temperature: float,
     repetition_penalty: float,
+    route: ShelfRoute | None = None,
 ) -> int:
     """Continue each story from its dilemma and print whether the ending holds.
 
@@ -150,6 +157,7 @@ def report_cohesion(  # noqa: PLR0913
             character=label.character,
             dilemma=label.dilemma,
             canon=canon,
+            route=route,
         )
         ending = resolution_span(written, boundary, eos_id)
         arc = arc_score(label.character, label.dilemma, ending, itos)
@@ -165,7 +173,7 @@ def report_cohesion(  # noqa: PLR0913
     return held
 
 
-def main() -> None:
+def main() -> None:  # noqa: PLR0915
     """Load the saved bag and print one continuation."""
     import mlx.core as mx  # noqa: PLC0415
 
@@ -196,6 +204,16 @@ def main() -> None:
     limited = limit_stories(stories, 10000)
     shelf = keep_short_stories(limited, STORY_WINDOW)
     labels, canon = label_shelf(shelf, itos)
+    route_path = data_dir / "bm25_shelf.json"
+    if route_path.is_file():
+        try:
+            route = ShelfRoute.load(route_path, shelf)
+        except ValueError:
+            route = ShelfRoute(shelf)
+            route.save(route_path)
+    else:
+        route = ShelfRoute(shelf)
+        route.save(route_path)
     mx.random.seed(int(args.seed))
     model = KuramotoMLX(
         len(itos),
@@ -224,6 +242,7 @@ def main() -> None:
             length=int(args.length),
             temperature=float(args.temperature),
             repetition_penalty=float(args.repetition_penalty),
+            route=route,
         )
         return
     eos_id = itos.index(EOS)
@@ -240,16 +259,16 @@ def main() -> None:
         character = label.character
         dilemma = label.dilemma
         token_ids = _through_dilemma(story, dilemma, canon, eos_id)
-        who = "" if character < 0 else itos[character].strip()
-        trouble = "" if dilemma < 0 else itos[dilemma].strip()
-        print(
-            f"story {index} character {who or '(none)'} dilemma {trouble or '(none)'} "
-            f"ending_names {label.arc.ending_names}",
-            flush=True,
-        )
-        kept_text = "".join(itos[token] for token in story if token != eos_id)
-        print(f"shelf: {kept_text}", flush=True)
-        print("content: " + "".join(itos[token] for token in token_ids), flush=True)
+        if args.shelf:
+            who = "" if character < 0 else itos[character].strip()
+            trouble = "" if dilemma < 0 else itos[dilemma].strip()
+            kept_text = "".join(itos[token] for token in story if token != eos_id)
+            print(
+                f"story {index} character {who or '(none)'} dilemma {trouble or '(none)'} "
+                f"ending_names {label.arc.ending_names}",
+                flush=True,
+            )
+            print(f"shelf: {kept_text}", flush=True)
     text = sample(
         model,
         itos,
@@ -262,6 +281,7 @@ def main() -> None:
         character=character,
         dilemma=dilemma,
         canon=canon,
+        route=route,
     )
     print(text, flush=True)
 
