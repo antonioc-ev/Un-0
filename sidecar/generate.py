@@ -23,8 +23,12 @@ from sidecar.story_tgnn import StoryTGNN, want_piece_ids
 from sidecar.train import load_corpus, sentence_end_ids
 from sidecar.train_mlx import (
     KuramotoMLX,
+    _case_table,
     apply_repetition_penalty,
+    choose_piece,
+    load_bag_weights,
     read_bag_meta,
+    readout_spec,
     spin,
     widths,
 )
@@ -87,28 +91,36 @@ def generate(  # noqa: PLR0913
     stoi = {gram: index for index, gram in enumerate(itos)}
     eos_id = stoi.get(EOS)
     ids = chunk_ids(prompt, chunk=chunk, stoi=stoi)
+    groups, table = _case_table(itos)
     graph = StoryTGNN()
     theta = model.theta0
     hold = mx.zeros((1, 1))
+    recognition = None
     for token in ids:
-        theta, hold = spin(model, theta, hold, token)
+        theta, hold, recognition = spin(model, theta, hold, token, recognition=recognition)
     for _ in range(length):
         shown = model.shown_state(theta[None, :], hold)[0]
         features = mx.concatenate([mx.sin(shown), mx.cos(shown)], axis=-1)
         logits = apply_repetition_penalty(
-            model.readout(features[None, :])[0],
+            model.logits_from(features[None, :])[0],
             ids,
             repetition_penalty,
+            itos,
         )
         logits = pull_want(logits, itos, "".join(itos[index] for index in ids), graph_pull, graph)
-        if temperature <= 0:
-            nxt = int(mx.argmax(logits).item())
-        else:
-            nxt = int(mx.random.categorical(logits / temperature).item())
+        previous = None if not ids else itos[ids[-1]]
+        nxt = choose_piece(
+            logits,
+            itos,
+            groups,
+            table,
+            previous=previous,
+            temperature=temperature,
+        )
         if eos_id is not None and nxt == eos_id:
             break
         ids.append(nxt)
-        theta, hold = spin(model, theta, hold, nxt)
+        theta, hold, recognition = spin(model, theta, hold, nxt, recognition=recognition)
     story = "".join(itos[index] for index in ids)
     want = graph.read(story).want()
     return story, "(not yet)" if want is None else str(want)
@@ -123,7 +135,7 @@ def main() -> None:
         raise FileNotFoundError(f"No saved bag at {weights_path}.")
     itos, _, chunk = load_corpus(data_dir)
     saved = mx.load(str(weights_path))
-    saved_vocab = int(saved["readout.bias"].shape[0])
+    saved_vocab, readout_rank = readout_spec(saved)
     if saved_vocab != len(itos):
         raise ValueError(
             f"Saved bag has {saved_vocab} pieces; the vocabulary on disk has {len(itos)}. "
@@ -139,13 +151,15 @@ def main() -> None:
         n_roots=n_roots,
         n_slow=int(meta["n_slow"]),
         n_stamp=int(meta["n_stamp"]),
+        n_arc=int(meta.get("n_arc", 0)),
         heavy_pull=float(meta["heavy_pull"]),
         heavy_dt_scale=float(meta["heavy_dt_scale"]),
         boundary_ids=tuple(sentence_end_ids(itos)),
         latch=bool(meta.get("latch", 0)),
         latch_blend=float(meta.get("latch_blend", 0.25)),
+        readout_rank=readout_rank,
     )
-    model.load_weights(str(weights_path))
+    load_bag_weights(model, weights_path)
     story, want = generate(
         model,
         itos,

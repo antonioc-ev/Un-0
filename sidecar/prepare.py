@@ -36,11 +36,24 @@ _DEFAULT_COUNT = 1000
 def piece_canon_ids(itos: list[str]) -> list[int]:
     """Map each piece onto its lowercase piece when that piece exists.
 
-    ``She`` and ``she`` are one kick. The next-piece score still sees the
-    capital, so a sentence can start with ``She``.
+    ``She`` and ``she`` are one kick. Playback still writes the capital when
+    the sentence calls for it.
     """
     lookup = {piece: index for index, piece in enumerate(itos)}
     return [lookup.get(piece.casefold(), index) for index, piece in enumerate(itos)]
+
+
+def case_groups(itos: list[str]) -> list[list[int]]:
+    """Surface pieces that casefold together, in first-seen order."""
+    groups: dict[str, list[int]] = {}
+    order: list[str] = []
+    for index, piece in enumerate(itos):
+        key = piece.casefold()
+        if key not in groups:
+            groups[key] = []
+            order.append(key)
+        groups[key].append(index)
+    return [groups[key] for key in order]
 
 
 def build_parser() -> argparse.ArgumentParser:

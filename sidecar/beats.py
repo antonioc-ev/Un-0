@@ -195,6 +195,28 @@ def arc_score(
     return StoryArc(who, trouble, ending)
 
 
+def resolution_span(
+    ids: list[int],
+    boundary_ids: set[int],
+    eos_id: int,
+) -> tuple[int, ...]:
+    """Return the last sentence. One sentence, or none, is an empty ending."""
+    body: list[int] = []
+    for token in ids:
+        if token == eos_id:
+            break
+        body.append(token)
+    marks = [index for index, token in enumerate(body) if token in boundary_ids]
+    if len(marks) < _ENDING_MARKS:
+        return ()
+    return tuple(body[marks[-_ENDING_MARKS] + 1 :])
+
+
+def holds_cohesion(arc: StoryArc) -> bool:
+    """Return whether the ending names the character, the dilemma, or both."""
+    return arc.ending_names != "neither"
+
+
 def _content_word(piece: str) -> str:
     """Casefold one piece. Glue and pieces with no letters count as empty."""
     word = piece.strip().casefold()

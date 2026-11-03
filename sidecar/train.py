@@ -7,11 +7,11 @@
 """Train the sidecar Kuramoto model on one story per row.
 
 Each story is read in full first and named: character, dilemma, and
-resolution. The arc reads whether the last sentence names them. One epoch then
-shuffles the stories and walks that order. A long story keeps its opening
-and still ends on the end piece; a short story is padded with the end piece
-after its own end. The loss is next-kick cross-entropy and skips that
-padding. One Euler step is one kick, and a kick is one whole word. The
+resolution. The arc reads whether the last sentence names them. A story that
+does not fit in one window is skipped whole. One epoch then shuffles the
+stories that remain and walks that order. A short story is padded with the
+end piece after its own end. The loss is next-kick cross-entropy and skips
+that padding. One Euler step is one kick, and a kick is one whole word. The
 character drive is on from the first kick. The dilemma drive starts when
 that piece appears in the window. The packing is defined in ``sidecar.prepare``.
 """
@@ -35,24 +35,49 @@ from sidecar.model import KuramotoWordLM
 from sidecar.prepare import EOS, chunk_ids, piece_canon_ids
 from sidecar.tgnn_lm import node_skip_ids
 
-# A whole-word story is about 210 kicks. The window is one story, not a crop
-# through a joined stream. A long story keeps the opening and the end piece.
-STORY_WINDOW = 256
+# One window is one whole story. Measured on the first 10000 rows of
+# sidecar/data/tokens.jsonl: the shortest story is 54 pieces, the median is
+# 186, and a cap of 32 keeps nothing (0). A cap of 112 keeps 209. The shortest
+# cap with at least a few hundred is 118, which keeps 317 of those 10000.
+# The real ending stays in the window. A longer story is skipped whole, not
+# chopped and closed with the end piece.
+# A full-window backward overflows float32 (512 wheels in epoch 1, 256 wheels
+# around epoch 9). Staged credit reaches the opening, but one epoch of that
+# walk took about 300 seconds, against about 5 seconds a batch for one
+# compiled graph. That graph is the POC budget, so the shelf is these short
+# stories and the default step is that one graph. The credit-stage function
+# stays in the Metal trainer for later. It is not the default, because of
+# that cost.
+STORY_WINDOW = 118
 # 128 wheels, rank 16, and 8 roots flattened near loss 3.1. A new sentence
 # replaced Lily in that one angle. The 128-wheel passes are kept in
 # sidecar/data/checkpoints_n128_rank16_roots8. The even-kick 256-wheel passes
 # are in sidecar/data/checkpoints_n256_even_kick (epochs 1, 10, 16, 20, 22).
 # The tug rank and the piece-drive grow with the wheel count so the new wheels
 # are actually driven.
+# 512 wheels stay. The window above is the short story, trained as one
+# compiled graph rather than the 32-kick credit stage.
+# 256 wheels. The bag at loss 1.715 used rank 64 and a dynamics scale of 0.1.
+# Rank 128 and a dynamics scale of 0.02 both trained worse, so those stay off.
+# The readout stays a narrow map, so one frequent piece cannot own a
+# private direction. Order is a separate catalog, K transpose r, not a wider tug.
 N_OSCILLATORS = 256
-RANK = 32
-N_ROOTS = 16
-# Eight wheels take a short step on every word, so a repeated name can pile up.
-# One more angle accumulates the sentence, and a period copies it into a latch
-# the next sentence is not allowed to erase. The latch is the dilemma try.
-N_SLOW = 8
-N_STAMP = 0
-LATCH = True
+RANK = 64
+N_ROOTS = 64
+READOUT_RANK = 64
+# Coupling and spin rate learn slower than the readout, the word injection,
+# and the memory route. 0.1 is the scale on the bag that reached loss 1.715.
+DYNAMICS_LR_SCALE = 0.1
+# Glue and sentence marks are most of the targets. They take a light share
+# of the loss so a rare content word can still move the wheels.
+GLUE_TARGET_WEIGHT = 0.2
+# Slow wheels hold the character and the beats. A word does not tug them.
+# Eight more wheels move only when the piece ends a sentence. The latch stays
+# off. One word wheel is the arc.
+N_SLOW = 32
+N_STAMP = 8
+N_ARC = 1
+LATCH = False
 LATCH_BLEND = 0.25
 HEAVY_PULL = 4.0
 HEAVY_DT_SCALE = 0.1
@@ -71,6 +96,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--n-roots", type=int, default=N_ROOTS)
     parser.add_argument("--n-slow", type=int, default=N_SLOW)
     parser.add_argument("--n-stamp", type=int, default=N_STAMP)
+    parser.add_argument("--n-arc", type=int, default=N_ARC)
     parser.add_argument("--latch", action=argparse.BooleanOptionalAction, default=LATCH)
     parser.add_argument("--latch-blend", type=float, default=LATCH_BLEND)
     parser.add_argument("--heavy-pull", type=float, default=HEAVY_PULL)
@@ -107,6 +133,32 @@ def limit_stories(stories: list[list[int]], count: int | None) -> list[list[int]
     return stories[:count]
 
 
+def keep_short_stories(stories: list[list[int]], cap: int) -> list[list[int]]:
+    """Skip a story that does not fit in one window. Keep the ones that do, whole.
+
+    Nothing on disk is rewritten. A story longer than ``cap`` is dropped, ending
+    included, instead of cutting the tail and pasting the end piece.
+    """
+    if cap < 2:  # noqa: PLR2004
+        raise ValueError("cap must be at least 2.")
+    return [story for story in stories if len(story) <= cap]
+
+
+def kept_story_at(stories: list[list[int]], index: int) -> tuple[list[list[int]], list[int]]:
+    """Return the short shelf and the story at ``index`` on that shelf.
+
+    Index 0 is the first story that fits in ``STORY_WINDOW``, the same cap
+    the trainer uses. A story longer than the cap is not on the shelf.
+    """
+    kept = keep_short_stories(stories, STORY_WINDOW)
+    if index < 0 or index >= len(kept):
+        raise ValueError(
+            f"Story {index} is past the kept shelf. "
+            f"{len(kept)} stories fit in {STORY_WINDOW} pieces."
+        )
+    return kept, kept[index]
+
+
 def sentence_end_ids(itos: list[str]) -> list[int]:
     """Pieces that end a sentence: punctuation containing ``.``, ``!``, or ``?``."""
     found: list[int] = []
@@ -130,13 +182,20 @@ class StoryLabels:
 
 @dataclass(frozen=True)
 class StoryBatch:
-    """Windowed rows plus the categories read before the cut."""
+    """Windowed rows plus the categories read from the full story.
+
+    ``tokens`` is the first window. ``windows`` is every window, in order,
+    so a story longer than the window still reaches its own ending. ``active``
+    marks rows that still have a real piece in that window.
+    """
 
     tokens: Tensor
     character: Tensor
     dilemma: Tensor
     resolution: tuple[tuple[int, ...], ...]
     arc: tuple[StoryArc, ...]
+    windows: tuple[Tensor, ...] = ()
+    active: tuple[Tensor, ...] = ()
 
     def to(self, device: torch.device) -> StoryBatch:
         """Copy the tokens and the drive ids. The copy blocks. The arc stays."""
@@ -146,6 +205,8 @@ class StoryBatch:
             self.dilemma.to(device),
             self.resolution,
             self.arc,
+            windows=tuple(window.to(device) for window in self.windows),
+            active=tuple(flag.to(device) for flag in self.active),
         )
 
 
@@ -181,15 +242,71 @@ def label_shelf(
     return labels, canon
 
 
-def _story_batch(rows: list[list[int]], labels: list[StoryLabels]) -> StoryBatch:
-    """Attach the full-story categories, including the arc, to the windowed rows."""
+def _story_batch(
+    rows: list[list[int]],
+    labels: list[StoryLabels],
+    *,
+    windows: tuple[Tensor, ...] = (),
+    active: tuple[Tensor, ...] = (),
+) -> StoryBatch:
+    """Attach the full-story categories, including the arc, to the windows."""
     return StoryBatch(
         tokens=torch.tensor(rows, dtype=torch.long),
         character=torch.tensor([label.character for label in labels], dtype=torch.long),
         dilemma=torch.tensor([label.dilemma for label in labels], dtype=torch.long),
         resolution=tuple(label.resolution for label in labels),
         arc=tuple(label.arc for label in labels),
+        windows=windows,
+        active=active,
     )
+
+
+def story_parts(story: list[int], seq_len: int, eos_id: int) -> list[list[int]]:
+    """Split one story into windows of ``seq_len`` without dropping the ending.
+
+    Each window is the next piece of the same story. The last window is padded
+    with the end piece after the real end. A later window keeps spinning from
+    the wheels the previous window left; it does not start a new story.
+    """
+    if seq_len < 2:  # noqa: PLR2004
+        raise ValueError("seq_len must be at least 2.")
+    if not story:
+        return [[eos_id] * seq_len]
+    parts: list[list[int]] = []
+    start = 0
+    while start < len(story):
+        part = story[start : start + seq_len]
+        start += seq_len
+        if len(part) < seq_len:
+            part = [*part, *([eos_id] * (seq_len - len(part)))]
+        parts.append(part)
+    return parts
+
+
+def stack_story_windows(
+    stories: list[list[int]],
+    seq_len: int,
+    eos_id: int,
+) -> tuple[tuple[Tensor, ...], tuple[Tensor, ...]]:
+    """Stack every story's windows. A row with no further piece is inactive."""
+    parts = [story_parts(story, seq_len, eos_id) for story in stories]
+    width = max(len(part) for part in parts)
+    windows: list[Tensor] = []
+    active: list[Tensor] = []
+    pad = [eos_id] * seq_len
+    for index in range(width):
+        rows: list[list[int]] = []
+        flags: list[bool] = []
+        for part in parts:
+            if index < len(part):
+                rows.append(part[index])
+                flags.append(True)
+            else:
+                rows.append(pad)
+                flags.append(False)
+        windows.append(torch.tensor(rows, dtype=torch.long))
+        active.append(torch.tensor(flags, dtype=torch.bool))
+    return tuple(windows), tuple(active)
 
 
 def fit_story(story: list[int], seq_len: int, eos_id: int) -> list[int]:
@@ -308,10 +425,11 @@ def prefetch_batches(  # noqa: PLR0913
 ) -> tuple[queue.Queue[Tensor | StoryBatch], threading.Thread]:
     """Fill a short queue of story rows ahead of the training step.
 
-    The worker shuffles once, then packs whole stories. When ``labels`` is
-    set, each label was read from the full story and the row is cut after
-    that. The queue holds two batches. Nothing is pinned, and the caller
-    copies onto the device itself.
+    The worker shuffles once, then packs whole stories. A story longer than
+    the window continues in the next window instead of losing its ending.
+    When ``labels`` is set, each label was read from the full story. The
+    queue holds two batches. Nothing is pinned, and the caller copies onto
+    the device itself.
     """
     if not stories:
         raise ValueError("Need at least one story.")
@@ -328,20 +446,29 @@ def prefetch_batches(  # noqa: PLR0913
         cursor = 0
         span = len(order)
         for _ in range(steps):
-            rows: list[list[int]] = []
+            chosen_stories: list[list[int]] = []
             chosen: list[StoryLabels] = []
             for _row in range(batch_size):
                 # A shelf smaller than the batch repeats so every step has the
                 # same width. A normal epoch does not wrap: the tail was dropped.
                 index = order[cursor % span]
-                rows.append(fit_story(stories[index], seq_len, eos_id))
+                chosen_stories.append(stories[index])
                 if labels is not None:
                     chosen.append(labels[index])
                 cursor += 1
             if labels is None:
+                rows = [story_parts(story, seq_len, eos_id)[0] for story in chosen_stories]
                 batches.put(torch.tensor(rows, dtype=torch.long))
             else:
-                batches.put(_story_batch(rows, chosen))
+                windows, active = stack_story_windows(chosen_stories, seq_len, eos_id)
+                batches.put(
+                    _story_batch(
+                        windows[0].tolist(),
+                        chosen,
+                        windows=windows,
+                        active=active,
+                    )
+                )
 
     worker = threading.Thread(target=produce, daemon=True)
     worker.start()
@@ -369,6 +496,9 @@ def main() -> None:
 
     itos, stories, chunk = load_corpus(args.data_dir)
     stories = limit_stories(stories, args.stories)
+    loaded = len(stories)
+    stories = keep_short_stories(stories, STORY_WINDOW)
+    print(f"short shelf {len(stories)} of {loaded} cap {STORY_WINDOW}", flush=True)
     labels, canon = label_shelf(stories, itos)
     seq_len = int(args.seq_len)
     batch_size = int(args.batch_size)
@@ -384,6 +514,7 @@ def main() -> None:
         euler_steps=int(args.euler_steps),
         n_slow=int(args.n_slow),
         n_stamp=int(args.n_stamp),
+        n_arc=int(args.n_arc),
         heavy_pull=float(args.heavy_pull),
         heavy_dt_scale=float(args.heavy_dt_scale),
         boundary_ids=tuple(sentence_end_ids(itos)),
@@ -391,6 +522,7 @@ def main() -> None:
         latch_blend=float(args.latch_blend),
         eos_id=eos_id,
         beat_canon_ids=canon,
+        readout_rank=READOUT_RANK,
     ).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=float(args.lr), weight_decay=0.01)
     n_params = sum(p.numel() for p in model.parameters())
